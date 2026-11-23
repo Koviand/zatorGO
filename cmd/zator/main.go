@@ -154,8 +154,9 @@ func cmdInstall(args []string, stdout, stderr io.Writer) int {
 		}
 	case a.Config.HasPassword():
 		// Повторный install / refresh ассетов (в т.ч. из update) — сохраняем auth.
-	case a.Installed() && !a.Config.AuthEnabled:
-		// Ранее сознательно -no-auth / auth disable — не навязываем пароль при refresh.
+	case a.ConfigExists() && !a.Config.AuthEnabled:
+		// Сознательный -no-auth / auth disable в существующем zator.json.
+		// Наличие только bin/zator без конфига сюда не попадает — пароль обязателен.
 	default:
 		pass, err := promptPassword(stderr, "Пароль Web UI: ", "Повтор пароля: ")
 		if err != nil {
@@ -249,11 +250,12 @@ func cmdUpdate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "zator не установлен в %s — сначала: zator install\n", a.Paths.ZatorRoot)
 		return 1
 	}
-	if info, err := a.CreatePreUpdateBackup(); err != nil {
-		fmt.Fprintf(stderr, "предупреждение: pre-update backup: %v\n", err)
-	} else {
-		fmt.Fprintf(stdout, "pre-update backup: %s\n", info.Name)
+	info, err := a.CreatePreUpdateBackup()
+	if err != nil {
+		fmt.Fprintf(stderr, "pre-update backup обязателен: %v\n", err)
+		return 1
 	}
+	fmt.Fprintf(stdout, "pre-update backup: %s\n", info.Name)
 	// Сначала локальные встроенные ресурсы, затем (если онлайн) релизный tar/бинарник.
 	if err := a.Update(); err != nil {
 		fmt.Fprintf(stderr, "обновление ресурсов не удалось: %v\n", err)
@@ -265,7 +267,7 @@ func cmdUpdate(args []string, stdout, stderr io.Writer) int {
 	off := deploy.ResolveOfflineBundle(os.Getenv)
 	if off.Offline {
 		if off.Bundle == nil {
-			fmt.Fprintln(stdout, "офлайн-режим: бандл не найден (ZATOR_BUNDLE_DIR / vendor+zator-*.tar.gz)")
+			fmt.Fprintln(stdout, "офлайн-режим: бандл не найден (задайте ZATOR_BUNDLE_DIR или положите vendor/+zator-*.tar.gz в cwd при Z2R_OFFLINE=1)")
 			return 0
 		}
 		fmt.Fprintf(stdout, "офлайн-бандл: %s\n", off.Bundle.Tarball)
@@ -356,6 +358,9 @@ func cmdUninstall(args []string, stdout, stderr io.Writer) int {
 // newWebHandler собирает обработчик Web UI: API (/cgi-bin/*.cgi и /api/*) и
 // статику. Без auth_enabled API открыт всем — предупреждение в stderr.
 func newWebHandler(a *app.App, stderr io.Writer) (http.Handler, error) {
+	if !a.ConfigExists() {
+		return nil, fmt.Errorf("нет %s: сначала выполните zator install", a.ConfigPath)
+	}
 	api, err := webapi.New(webapi.Options{App: a})
 	if err != nil {
 		return nil, err
@@ -398,6 +403,9 @@ func cmdServe(name string, args []string, stdout, stderr io.Writer) int {
 		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
+		// Тело: формы до 4 МиБ, бэкап до 32 МиБ; долгие update/restart без WriteTimeout.
+		ReadTimeout: 5 * time.Minute,
+		IdleTimeout: 2 * time.Minute,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

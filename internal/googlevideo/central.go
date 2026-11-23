@@ -86,9 +86,10 @@ func ParseList(data []byte) (List, error) {
 	if len(data) > MaxListBytes {
 		return List{}, ErrListTooLarge
 	}
-	// Разбиение строго по «\n»: «\r» остаётся в строке и отвергается как мусор.
+	// Разбиение по «\n»; завершающий «\r» (CRLF) снимаем — иначе Windows-checkout
+	// и go:embed с CRLF ломают валидный список.
 	lines := strings.Split(string(data), "\n")
-	header := lines[0]
+	header := strings.TrimSuffix(lines[0], "\r")
 	if !strings.HasPrefix(header, ListHeaderPrefix) {
 		return List{}, ErrListHeader
 	}
@@ -97,6 +98,7 @@ func ParseList(data []byte) (List, error) {
 		list.Generated = list.Generated[:i]
 	}
 	for _, line := range lines[1:] {
+		line = strings.TrimSuffix(line, "\r")
 		if line == "" {
 			continue
 		}

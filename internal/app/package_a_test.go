@@ -75,14 +75,8 @@ NFQWS2_OPT="
 
 func TestApplyZapretRuntimeWritesArgs(t *testing.T) {
 	root := t.TempDir()
-	p := paths.Paths{
-		ZatorRoot:  root,
-		StateDir:   filepath.Join(root, "state"),
-		ConfigDir:  filepath.Join(root, "config"),
-		ZapretRoot: filepath.Join(root, "zapret2"),
-		LuaDir:     filepath.Join(root, "lua"),
-	}
-	p.ZapretConfig = filepath.Join(p.ZapretRoot, "config")
+	zapret := filepath.Join(root, "zapret2")
+	p := paths.New(filepath.Join(root, "zator"), zapret)
 	if err := os.MkdirAll(p.ZapretRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -129,5 +123,12 @@ ${Z2R_WSSIZE_RAMP_SKIP} --filter-l3=ipv4 --filter-tcp=443 --filter-mark=${Z2R_WS
 	}
 	if v, _ := live.Get("Z2R_WSSIZE_RAMP_SKIP"); v != "" {
 		t.Fatalf("live SKIP=%q", v)
+	}
+}
+
+func TestEnsureHostlistPlaceholdersRejectsEmptyDirs(t *testing.T) {
+	a := NewWith(paths.Paths{}, platform.Platform{})
+	if err := a.ensureHostlistPlaceholders(); err == nil {
+		t.Fatal("ожидалась ошибка при пустых ListsDir/ExtraStratsDir")
 	}
 }

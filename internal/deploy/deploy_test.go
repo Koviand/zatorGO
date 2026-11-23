@@ -149,6 +149,39 @@ func TestResolveOfflineBundleEnv(t *testing.T) {
 	}
 }
 
+func TestResolveOfflineBundleIgnoresCwdWithoutFlag(t *testing.T) {
+	// Без ZATOR_BUNDLE_DIR и без Z2R_OFFLINE бандл не подхватывается
+	// (даже если бы он лежал в cwd — мы его сюда не передаём).
+	st := ResolveOfflineBundle(func(string) string { return "" })
+	if st.Offline || st.Bundle != nil {
+		t.Fatalf("unexpected offline auto-detect: %+v", st)
+	}
+}
+
+func TestResolveOfflineBundleCwdOnlyWithEnvFlag(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(dir, "vendor"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "zator-full.tar.gz"), []byte("x"), 0o644)
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+
+	st := ResolveOfflineBundle(func(k string) string {
+		if k == EnvOffline {
+			return "1"
+		}
+		return ""
+	})
+	if !st.Offline || st.Bundle == nil || st.Bundle.Dir != dir {
+		t.Fatalf("want cwd bundle under Z2R_OFFLINE: %+v", st)
+	}
+}
+
 func TestKeepIfExists(t *testing.T) {
 	root := t.TempDir()
 	p := paths.New(filepath.Join(root, "zator"), filepath.Join(root, "zapret2"))

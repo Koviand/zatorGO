@@ -131,6 +131,9 @@ func (a *App) SyncCustomDHooks(cfg *config.Config) error {
 }
 
 func (a *App) ensureHostlistPlaceholders() error {
+	if a.Paths.ExtraStratsDir == "" || a.Paths.ListsDir == "" {
+		return fmt.Errorf("app: ExtraStratsDir/ListsDir не заданы — отказ писать hostlist в cwd")
+	}
 	files := []string{
 		filepath.Join(a.Paths.ExtraStratsDir, "TCP_RKN_list.txt"),
 		filepath.Join(a.Paths.ExtraStratsDir, "TCP_Custom.txt"),
@@ -141,6 +144,9 @@ func (a *App) ensureHostlistPlaceholders() error {
 		filepath.Join(a.Paths.ListsDir, "googlevideo-ipv4.txt"),
 	}
 	for _, p := range files {
+		if !filepath.IsAbs(p) {
+			return fmt.Errorf("app: относительный hostlist-путь запрещён: %s", p)
+		}
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			return err
 		}

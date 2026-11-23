@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/AloofLibra/zator/internal/paths"
 	"github.com/AloofLibra/zator/internal/platform"
@@ -66,6 +68,11 @@ type App struct {
 	Platform   platform.Platform
 	ConfigPath string // путь к zator.json
 	Config     Config
+
+	authMu        sync.Mutex // Config auth-поля + Save
+	authDirty     bool       // true — Save не подмешивает auth с диска (CLI/login)
+	authFileMod   time.Time  // mtime ConfigPath на момент последнего ReloadAuth
+	authCheckedAt time.Time  // когда последний раз смотрели mtime
 }
 
 // New создаёт App с раскладкой из переменных окружения, определённой
@@ -134,8 +141,23 @@ func (a *App) Load() error {
 	return nil
 }
 
+// ConfigExists — на диске есть zator.json (отличие от «только bin/zator»).
+func (a *App) ConfigExists() bool {
+	st, err := os.Stat(a.ConfigPath)
+	return err == nil && !st.IsDir()
+}
+
 // Save атомарно записывает конфигурацию в ConfigPath (права 0600 — секреты).
+// Если auth не менялся в этом процессе (authDirty=false), auth-поля
+// подтягиваются с диска — чтобы Save из Web UI не затирал `zator auth …`.
 func (a *App) Save() error {
+	a.authMu.Lock()
+	defer a.authMu.Unlock()
+	if !a.authDirty {
+		if err := a.reloadAuthUnlocked(); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
 	if err := a.Config.Validate(); err != nil {
 		return err
 	}
@@ -164,7 +186,11 @@ func (a *App) Save() error {
 		return err
 	}
 	_ = os.Chmod(tmpName, 0o600)
-	return os.Rename(tmpName, a.ConfigPath)
+	if err := os.Rename(tmpName, a.ConfigPath); err != nil {
+		return err
+	}
+	a.authDirty = false
+	return nil
 }
 
 // WebUIURL возвращает URL Web UI (без секретов в query).

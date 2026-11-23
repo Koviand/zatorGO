@@ -44,6 +44,10 @@ func TestParseList(t *testing.T) {
 	if l, err := ParseList([]byte("# googlevideo IPv4; generated=123\n8.8.8.8\n")); err != nil || l.Generated != "123" {
 		t.Errorf("generated: %v %+v", err, l)
 	}
+	// CRLF (Windows checkout / go:embed) допустим.
+	if l, err := ParseList([]byte(goodHeader + "\r\n8.8.8.8\r\n1.1.1.1\r\n")); err != nil || len(l.IPs) != 2 || l.IPs[0] != "8.8.8.8" || l.Generated != "2026-11-10T00:00:00Z" {
+		t.Errorf("crlf: %v %+v", err, l)
+	}
 }
 
 func TestParseList_Errors(t *testing.T) {
@@ -68,7 +72,7 @@ func TestParseList_Errors(t *testing.T) {
 		{"leading zero", goodHeader + "08.8.8.8\n", ErrListAddress},
 		{"comment after header", goodHeader + "# note\n8.8.8.8\n", ErrListAddress},
 		{"two columns", goodHeader + "8.8.8.8 9.9.9.9\n", ErrListAddress},
-		{"crlf", goodHeader + "8.8.8.8\r\n", ErrListAddress},
+		{"bare cr in address", goodHeader + "8.8.8.8\r9.9.9.9\n", ErrListAddress},
 		{"ipv6", goodHeader + "2001:db8::1\n", ErrListAddress},
 		{"too many", listBody(genIPs(MaxListIPs + 1)...), ErrListCount},
 		{"too large", string(big), ErrListTooLarge},

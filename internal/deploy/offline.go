@@ -102,35 +102,39 @@ func (u *Updater) ApplyBundle(b Bundle, tag string) (*ApplyResult, error) {
 	return u.ApplyArchive(b.Tarball, ApplyOptions{Tracking: tracking})
 }
 
-// ResolveOfflineBundle ищет бандл в ZATOR_BUNDLE_DIR, cwd и рядом с бинарником.
-// Offline=true также при Z2R_OFFLINE=1 (даже без бандла).
+// ResolveOfflineBundle ищет офлайн-бандл.
+//
+// Каталоги:
+//   - ZATOR_BUNDLE_DIR — всегда (явный путь);
+//   - cwd и каталог бинарника — только при Z2R_OFFLINE=1 / ZATOR_OFFLINE=1
+//     (иначе случайный zator-*.tar.gz в /tmp или ~ применялся бы от root).
+//
+// Offline=true также при Z2R_OFFLINE=1 без бандла (сеть отключена).
 func ResolveOfflineBundle(getenv func(string) string) OfflineStatus {
 	if getenv == nil {
 		getenv = os.Getenv
 	}
+	st := DetectOffline(getenv, "")
 	dirs := make([]string, 0, 4)
 	if v := strings.TrimSpace(getenv(EnvBundleDir)); v != "" {
 		dirs = append(dirs, v)
 	}
-	if cwd, err := os.Getwd(); err == nil && cwd != "" {
-		dirs = append(dirs, cwd)
+	if st.Offline && st.Reason == "env" {
+		if cwd, err := os.Getwd(); err == nil && cwd != "" {
+			dirs = append(dirs, cwd)
+		}
+		if ex, err := os.Executable(); err == nil && ex != "" {
+			dirs = append(dirs, filepath.Dir(ex))
+		}
 	}
-	if exe, err := os.Executable(); err == nil && exe != "" {
-		dirs = append(dirs, filepath.Dir(exe))
-	}
-	var found *Bundle
 	for _, d := range dirs {
 		if b, ok := FindBundle(d); ok {
 			bb := b
-			found = &bb
-			break
-		}
-	}
-	st := DetectOffline(getenv, "")
-	if found != nil {
-		st.Bundle = found
-		if !st.Offline {
-			st.Offline, st.Reason = true, "bundle"
+			st.Bundle = &bb
+			if !st.Offline {
+				st.Offline, st.Reason = true, "bundle"
+			}
+			return st
 		}
 	}
 	return st

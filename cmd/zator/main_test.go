@@ -152,11 +152,26 @@ func TestWebHandlerWarnsWithoutAuth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	a.DisableAuthExplicitly()
+	if err := a.Save(); err != nil {
+		t.Fatal(err)
+	}
 	var warn bytes.Buffer
 	if _, err := newWebHandler(a, &warn); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(warn.String(), "без проверки доступа") {
 		t.Errorf("нет сообщения об открытом доступе: %q", warn.String())
+	}
+}
+
+func TestWebHandlerRequiresConfig(t *testing.T) {
+	setupEnv(t)
+	a, err := app.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newWebHandler(a, io.Discard); err == nil {
+		t.Fatal("ожидалась ошибка без zator.json")
 	}
 }
