@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/AloofLibra/zator/internal/fsutil"
+	"github.com/AloofLibra/zator/internal/domains"
 	"github.com/AloofLibra/zator/internal/googlevideo"
 	"github.com/AloofLibra/zator/internal/netcheck"
 	"github.com/AloofLibra/zator/internal/orchestra"
@@ -67,58 +67,68 @@ func googlevideoNormalize(v string) (string, bool) {
 	return googlevideo.ParseHostInput(v)
 }
 
-// normalizeDomain приводит ввод к имени хоста: убирает схему, путь, порт,
-// ведущие «*.»/«.» и хвостовую точку; результат в нижнем регистре.
-func normalizeDomain(v string) (string, bool) {
-	v = strings.ToLower(strings.TrimSpace(v))
-	if i := strings.Index(v, "://"); i >= 0 {
-		v = v[i+3:]
-	}
-	if i := strings.IndexAny(v, "/?#"); i >= 0 {
-		v = v[:i]
-	}
-	if i := strings.LastIndex(v, "@"); i >= 0 {
-		v = v[i+1:]
-	}
-	if i := strings.LastIndex(v, ":"); i >= 0 {
-		if _, err := strconv.Atoi(v[i+1:]); err == nil {
-			v = v[:i]
-		}
-	}
-	v = strings.TrimPrefix(v, "*.")
-	v = strings.Trim(v, ".")
-	if !strings.Contains(v, ".") || !netcheck.ValidDomain(v) {
-		return "", false
-	}
-	return v, true
-}
-
-// listNormalize нормализует значение по виду списка.
+// listNormalize нормализует значение через domains.Manager (кроме googlevideo).
 func (d listDef) normalize(v string) (string, error) {
 	v = strings.TrimSpace(v)
-	if d.kind == listKindSubstring {
-		if v == "" {
-			return "", errf(http.StatusBadRequest, "Пустая подстрока")
-		}
-		return v, nil
-	}
-	if v == "" {
-		return "", errf(http.StatusBadRequest, "Не указан домен")
-	}
 	if d.name == "googlevideo" {
+		if v == "" {
+			return "", errf(http.StatusBadRequest, "Не указан домен")
+		}
 		n, ok := googlevideoNormalize(v)
 		if !ok {
 			return "", errf(http.StatusBadRequest, "Нужен media CDN host rrN---sn-….googlevideo.com: "+v)
 		}
 		return n, nil
 	}
-	n, ok := normalizeDomain(v)
+	kind, ok := domains.KindFromAPIList(d.name)
 	if !ok {
+		return "", errf(http.StatusBadRequest, "Неизвестный список")
+	}
+	if v == "" {
+		if d.kind == listKindSubstring {
+			return "", errf(http.StatusBadRequest, "Пустая подстрока")
+		}
+		return "", errf(http.StatusBadRequest, "Не указан домен")
+	}
+	n, err := domains.Normalize(kind, v)
+	if err != nil {
+		if d.kind == listKindSubstring {
+			return "", errf(http.StatusBadRequest, "Пустая подстрока")
+		}
 		return "", errf(http.StatusBadRequest, "Некорректный домен: "+v)
 	}
 	return n, nil
 }
 
+func (d listDef) domainKind() (domains.Kind, bool) {
+	return domains.KindFromAPIList(d.name)
+}
+
+func (s *Server) customMax() int {
+	cfg, _ := s.readConfig()
+	if n := cfg.ProfileMaxStrategyOrDefault(3); n > 0 {
+		return n
+	}
+	return 19
+}
+
+func mapDomainsErr(err error, domainMsg string) error {
+	if err == nil {
+		return nil
+	}
+	switch {
+	case errors.Is(err, domains.ErrInvalid):
+		return errf(http.StatusBadRequest, domainMsg)
+	case errors.Is(err, domains.ErrNotFound):
+		return errf(http.StatusBadRequest, "Записи нет в списке")
+	case errors.Is(err, domains.ErrExists):
+		return errf(http.StatusConflict, err.Error())
+	default:
+		return errf(http.StatusInternalServerError, err.Error())
+	}
+}
+
+// readListLines / listEntries — вспомогательные для settings (googlevideo-ipv4.txt).
 func readListLines(path string) ([]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -135,70 +145,16 @@ func readListLines(path string) ([]string, error) {
 	return strings.Split(text, "\n"), nil
 }
 
-func writeListLines(path string, lines []string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	data := ""
-	if len(lines) > 0 {
-		data = strings.Join(lines, "\n") + "\n"
-	}
-	return fsutil.AtomicWriteFile(path, []byte(data), 0o644)
-}
-
-func isEntry(line string) (string, bool) {
-	t := strings.TrimSpace(line)
-	if t == "" || strings.HasPrefix(t, "#") {
-		return "", false
-	}
-	return t, true
-}
-
 func listEntries(lines []string) []string {
 	var out []string
 	for _, ln := range lines {
-		if e, ok := isEntry(ln); ok {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
-func containsEntry(lines []string, v string) bool {
-	for _, e := range listEntries(lines) {
-		if e == v {
-			return true
-		}
-	}
-	return false
-}
-
-// customRknRestore возвращает в TCP_Custom домены, оставшиеся только в locked.tsv.
-func (s *Server) customRknRestore(path string, lines []string) ([]string, bool) {
-	recs, err := s.store.ListLocks(orchestra.ScopeDefault)
-	if err != nil {
-		return lines, false
-	}
-	changed := false
-	for _, r := range recs {
-		if !orchestra.IsCustomDomain(r.Profile) || containsEntry(lines, r.Profile) {
+		t := strings.TrimSpace(ln)
+		if t == "" || strings.HasPrefix(t, "#") {
 			continue
 		}
-		lines = append(lines, r.Profile)
-		changed = true
+		out = append(out, t)
 	}
-	if changed {
-		_ = writeListLines(path, lines)
-	}
-	return lines, changed
-}
-
-func (s *Server) customMax() int {
-	cfg, _ := s.readConfig()
-	if n := cfg.ProfileMaxStrategyOrDefault(3); n > 0 {
-		return n
-	}
-	return 19
+	return out
 }
 
 // --- GET ---
@@ -207,23 +163,24 @@ func (s *Server) domainsList(d listDef, scope string) (map[string]any, error) {
 	if d.name == "googlevideo" {
 		return s.googlevideoList(d)
 	}
-	path := d.file(s)
-	lines, err := readListLines(path)
+	kind, ok := d.domainKind()
+	if !ok {
+		return nil, errf(http.StatusBadRequest, "Неизвестный список")
+	}
+	if d.custom {
+		_, _ = s.domains.RestoreFromLocks()
+	}
+	entries, err := s.domains.ListWithStrategiesInScope(kind, scope)
 	if err != nil {
 		return nil, err
 	}
-	if d.custom {
-		lines, _ = s.customRknRestore(path, lines)
-	}
-	items := []map[string]any{}
-	for _, e := range listEntries(lines) {
-		item := map[string]any{"value": e}
-		if d.custom {
-			n := 0
-			if st, err := s.store.GetLock(scope, e, "tls"); err == nil && !st.IsAuto() {
-				n = int(st)
+	items := make([]map[string]any, 0, len(entries))
+	for _, e := range entries {
+		item := map[string]any{"value": e.Value}
+		if d.custom && !e.Strategy.IsAuto() {
+			if n := int(e.Strategy); n >= 1 {
+				item["strategy"] = n
 			}
-			item["strategy"] = n
 		}
 		items = append(items, item)
 	}
@@ -313,9 +270,18 @@ func (s *Server) handleDomains(w http.ResponseWriter, r *http.Request, p params)
 		return
 	}
 	s.listMu.Lock()
-	defer s.listMu.Unlock()
+	held := true
+	unlock := func() {
+		if held {
+			held = false
+			s.listMu.Unlock()
+		}
+	}
+	defer unlock()
+
 	if r.Method == http.MethodGet {
 		v, err := s.domainsList(d, scope)
+		unlock()
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "Не удалось прочитать список: "+err.Error())
 			return
@@ -324,9 +290,19 @@ func (s *Server) handleDomains(w http.ResponseWriter, r *http.Request, p params)
 		return
 	}
 	out, err := s.domainsAction(r, d, p, scope)
+	var pendingCheck string
+	if out != nil {
+		pendingCheck, _ = out["_pending_check"].(string)
+		delete(out, "_pending_check")
+	}
+	unlock()
 	if err != nil {
 		writeErr(w, err)
 		return
+	}
+	// Сетевая проверка вне listMu — иначе GET списков блокируется на минуты.
+	if pendingCheck != "" && out != nil {
+		out["check"] = s.checkDomain(r, pendingCheck)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -354,44 +330,35 @@ func (s *Server) domainsAction(r *http.Request, d listDef, p params, scope strin
 	if d.name == "googlevideo" {
 		return s.googlevideoAction(p)
 	}
-	path := d.file(s)
+	kind, ok := d.domainKind()
+	if !ok {
+		return nil, errf(http.StatusBadRequest, "Неизвестный список")
+	}
 	action := p.Get("action")
-	lines, err := readListLines(path)
-	if err != nil {
-		return nil, errf(http.StatusInternalServerError, "Не удалось прочитать список: "+err.Error())
-	}
 	if d.custom {
-		lines, _ = s.customRknRestore(path, lines)
-	}
-	save := func(l []string) error {
-		if err := writeListLines(path, l); err != nil {
-			return errf(http.StatusInternalServerError, "Не удалось записать список: "+err.Error())
-		}
-		return nil
+		_, _ = s.domains.RestoreFromLocks()
 	}
 
 	switch action {
 	case "add":
+		if err := s.autoGuard(d); err != nil {
+			return nil, err
+		}
 		value, err := d.normalize(p.Get("domain"))
 		if err != nil {
 			return nil, err
 		}
-		if err := s.autoGuard(d); err != nil {
-			return nil, err
-		}
-		if containsEntry(lines, value) {
-			out := map[string]any{"ok": true, "duplicate": true}
-			if d.custom {
-				out["check"] = s.checkDomain(r, value)
+		norm, added, aerr := s.domains.Add(kind, value)
+		if aerr != nil {
+			msg := "Некорректный домен: " + p.Get("domain")
+			if d.kind == listKindSubstring {
+				msg = "Пустая подстрока"
 			}
-			return out, nil
+			return nil, mapDomainsErr(aerr, msg)
 		}
-		if err := save(append(lines, value)); err != nil {
-			return nil, err
-		}
-		out := map[string]any{"ok": true, "duplicate": false}
+		out := map[string]any{"ok": true, "duplicate": !added}
 		if d.custom {
-			out["check"] = s.checkDomain(r, value)
+			out["_pending_check"] = norm
 		}
 		return out, nil
 
@@ -403,23 +370,16 @@ func (s *Server) domainsAction(r *http.Request, d listDef, p params, scope strin
 		if err != nil {
 			return nil, err
 		}
-		var keep []string
-		for _, ln := range lines {
-			if e, ok := isEntry(ln); ok && e == value {
-				continue
+		removed, rerr := s.domains.Remove(kind, value)
+		if rerr != nil {
+			if removed && d.custom {
+				return map[string]any{
+					"ok": true, "warning": "Домен удалён из списка, но лок стратегии не снят: " + rerr.Error(),
+				}, nil
 			}
-			keep = append(keep, ln)
+			return nil, errf(http.StatusInternalServerError, "Не удалось записать список: "+rerr.Error())
 		}
-		if err := save(keep); err != nil {
-			return nil, err
-		}
-		out := map[string]any{"ok": true}
-		if d.custom {
-			if err := s.store.ClearEverywhere(value, "tls"); err != nil {
-				out["warning"] = "Домен удалён из списка, но лок стратегии не снят: " + err.Error()
-			}
-		}
-		return out, nil
+		return map[string]any{"ok": true}, nil
 
 	case "rename":
 		if err := s.autoGuard(d); err != nil {
@@ -433,31 +393,17 @@ func (s *Server) domainsAction(r *http.Request, d listDef, p params, scope strin
 		if err != nil {
 			return nil, err
 		}
-		if !containsEntry(lines, old) {
-			return nil, errf(http.StatusBadRequest, "Записи нет в списке")
-		}
 		if old == next {
 			return map[string]any{"ok": true, "domain": old}, nil
 		}
-		if containsEntry(lines, next) {
-			return nil, errf(http.StatusConflict, "Запись "+next+" уже есть в списке")
-		}
-		out := make([]string, len(lines))
-		for i, ln := range lines {
-			if e, ok := isEntry(ln); ok && e == old {
-				out[i] = next
-			} else {
-				out[i] = ln
+		if err := s.domains.Rename(kind, old, next); err != nil {
+			if errors.Is(err, domains.ErrNotFound) {
+				return nil, errf(http.StatusBadRequest, "Записи нет в списке")
 			}
-		}
-		if err := save(out); err != nil {
-			return nil, err
-		}
-		if d.custom {
-			if err := s.renameLocks(old, next); err != nil {
-				_ = save(lines) // откат имени в списке — лок не перенесён
-				return nil, errf(http.StatusInternalServerError, "Не удалось перенести стратегию домена: "+err.Error())
+			if errors.Is(err, domains.ErrExists) {
+				return nil, errf(http.StatusConflict, "Запись "+next+" уже есть в списке")
 			}
+			return nil, errf(http.StatusInternalServerError, "Не удалось перенести стратегию домена: "+err.Error())
 		}
 		return map[string]any{"ok": true, "domain": next}, nil
 
@@ -465,30 +411,9 @@ func (s *Server) domainsAction(r *http.Request, d listDef, p params, scope strin
 		if err := s.autoGuard(d); err != nil {
 			return nil, err
 		}
-		added, dups, skipped := 0, 0, 0
-		fields := strings.FieldsFunc(p.Raw("domain"), func(r rune) bool {
-			return r == '\n' || r == '\r' || r == '\t' || r == ' ' || r == ',' || r == ';'
-		})
-		for _, f := range fields {
-			if strings.HasPrefix(f, "#") {
-				continue
-			}
-			value, err := d.normalize(f)
-			if err != nil {
-				skipped++
-				continue
-			}
-			if containsEntry(lines, value) {
-				dups++
-				continue
-			}
-			lines = append(lines, value)
-			added++
-		}
-		if added > 0 {
-			if err := save(lines); err != nil {
-				return nil, err
-			}
+		added, dups, skipped, ierr := s.domains.Import(kind, p.Raw("domain"))
+		if ierr != nil {
+			return nil, errf(http.StatusInternalServerError, "Не удалось записать список: "+ierr.Error())
 		}
 		return map[string]any{"ok": true, "added": added, "duplicates": dups, "skipped": skipped}, nil
 
@@ -496,21 +421,13 @@ func (s *Server) domainsAction(r *http.Request, d listDef, p params, scope strin
 		if err := s.autoGuard(d); err != nil {
 			return nil, err
 		}
-		entries := listEntries(lines)
-		if err := save(nil); err != nil {
-			return nil, err
+		cleared, failed, cerr := s.domains.Clear(kind)
+		if cerr != nil {
+			return nil, errf(http.StatusInternalServerError, "Не удалось записать список: "+cerr.Error())
 		}
-		out := map[string]any{"ok": true, "cleared": len(entries)}
-		if d.custom {
-			var failed int
-			for _, e := range entries {
-				if err := s.store.ClearEverywhere(e, "tls"); err != nil {
-					failed++
-				}
-			}
-			if failed > 0 {
-				out["warning"] = fmt.Sprintf("Список очищен, но не снято локов: %d", failed)
-			}
+		out := map[string]any{"ok": true, "cleared": cleared}
+		if failed > 0 {
+			out["warning"] = fmt.Sprintf("Список очищен, но не снято локов: %d", failed)
 		}
 		return out, nil
 
@@ -526,18 +443,18 @@ func (s *Server) domainsAction(r *http.Request, d listDef, p params, scope strin
 		if !strategyRe.MatchString(raw) {
 			return nil, errf(http.StatusBadRequest, "Некорректная стратегия")
 		}
-		if !containsEntry(lines, domain) {
-			return nil, errf(http.StatusBadRequest, "Домена нет в списке")
-		}
 		n, _ := strconv.Atoi(raw)
 		max := s.customMax()
 		if n < 1 || n > max {
 			return nil, errf(http.StatusBadRequest, fmt.Sprintf("Стратегия вне диапазона (1..%d)", max))
 		}
-		if err := s.store.SetLock(scope, domain, "tls", orchestra.Strategy(n)); err != nil {
+		if err := s.domains.SetStrategyInScope(scope, domain, orchestra.Strategy(n)); err != nil {
+			if errors.Is(err, domains.ErrNotFound) {
+				return nil, errf(http.StatusBadRequest, "Домена нет в списке")
+			}
 			return nil, errf(http.StatusInternalServerError, "Не удалось сохранить стратегию: "+err.Error())
 		}
-		return map[string]any{"ok": true, "strategy": n, "check": s.checkDomain(r, domain)}, nil
+		return map[string]any{"ok": true, "strategy": n, "_pending_check": domain}, nil
 
 	case "clear_strategy":
 		if !d.custom {
@@ -547,7 +464,7 @@ func (s *Server) domainsAction(r *http.Request, d listDef, p params, scope strin
 		if err != nil {
 			return nil, err
 		}
-		if err := s.store.ClearLock(scope, domain, "tls"); err != nil {
+		if err := s.domains.ClearStrategy(scope, domain); err != nil {
 			return nil, errf(http.StatusInternalServerError, "Не удалось сбросить стратегию: "+err.Error())
 		}
 		return map[string]any{"ok": true}, nil
@@ -560,7 +477,7 @@ func (s *Server) domainsAction(r *http.Request, d listDef, p params, scope strin
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"ok": true, "check": s.checkDomain(r, domain)}, nil
+		return map[string]any{"ok": true, "_pending_check": domain}, nil
 	}
 	return nil, errf(http.StatusBadRequest, "Неизвестное действие: "+action)
 }
@@ -624,33 +541,3 @@ func (s *Server) googlevideoAction(p params) (map[string]any, error) {
 	return nil, errf(http.StatusBadRequest, "Неизвестное действие: "+p.Get("action"))
 }
 
-// renameLocks переносит фиксации домена (default и per-mark) на новое имя.
-// При ошибке SetLock откатывает уже записанные new-локи и не трогает old.
-func (s *Server) renameLocks(old, next string) error {
-	scopes, err := s.store.ListScopes()
-	if err != nil {
-		return err
-	}
-	type moved struct {
-		scope string
-		st    orchestra.Strategy
-	}
-	var done []moved
-	for _, sc := range scopes {
-		st, err := s.store.GetLock(sc, old, "tls")
-		if err != nil || st.IsAuto() {
-			continue
-		}
-		if err := s.store.SetLock(sc, next, "tls", st); err != nil {
-			for _, m := range done {
-				_ = s.store.ClearLock(m.scope, next, "tls")
-			}
-			return err
-		}
-		done = append(done, moved{scope: sc, st: st})
-	}
-	if err := s.store.ClearEverywhere(old, "tls"); err != nil {
-		return err
-	}
-	return nil
-}

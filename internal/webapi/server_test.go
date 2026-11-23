@@ -59,8 +59,8 @@ func TestAuth(t *testing.T) {
 
 	resp, out := e.get("/api/status")
 	wantError(t, resp, out, http.StatusUnauthorized, "Требуется авторизация")
-	if resp.Header.Get("WWW-Authenticate") == "" {
-		t.Error("нет WWW-Authenticate")
+	if resp.Header.Get("WWW-Authenticate") != "" {
+		t.Errorf("/api/* не должен слать WWW-Authenticate: %q", resp.Header.Get("WWW-Authenticate"))
 	}
 	// Статика SPA открыта без cookie.
 	if resp, body := e.do(http.MethodGet, "/", nil, nil); resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "<html") {

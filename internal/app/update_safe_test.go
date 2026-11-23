@@ -37,9 +37,12 @@ func TestPreUpdateBackupMarkers(t *testing.T) {
 		ConfigDir:  filepath.Join(root, "config"),
 	}
 	p.ZapretConfig = filepath.Join(p.ZapretRoot, "config")
+	p.BinDir = filepath.Join(root, "bin")
 	_ = os.MkdirAll(p.ZapretRoot, 0o755)
 	_ = os.MkdirAll(p.ListsDir, 0o755)
+	_ = os.MkdirAll(p.BinDir, 0o755)
 	_ = os.WriteFile(p.ZapretConfig, []byte("QNUM=200\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(p.BinDir, "zator"), []byte("BIN"), 0o755)
 	a := NewWith(p, platform.Platform{})
 	info, err := a.CreatePreUpdateBackup()
 	if err != nil {

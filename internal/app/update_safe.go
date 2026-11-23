@@ -15,16 +15,29 @@ import (
 
 const preUpdateBinRel = "pre_update_bin/zator"
 
+// ClearPreUpdateRollbackState снимает имя архива и снимок бинарника,
+// чтобы неудачный backup не оставлял откат на устаревшее состояние.
+func (a *App) ClearPreUpdateRollbackState() {
+	_ = os.Remove(filepath.Join(a.Paths.StateDir, postUpdateBackupFile))
+	_ = os.Remove(a.preUpdateBinaryPath())
+}
+
 // CreatePreUpdateBackup снимает product-backup перед update (config+lists+orchestra)
 // и снимок бинарника bin/zator (ModeSmart его не откатывает).
+// При ошибке маркеры отката очищены — RollbackPreUpdateBackup не возьмёт старый архив.
 func (a *App) CreatePreUpdateBackup() (backup.Info, error) {
+	_ = os.MkdirAll(a.Paths.StateDir, 0o755)
+	a.ClearPreUpdateRollbackState()
 	mgr := backup.NewIn(a.Paths, a.Paths.BackupDir)
 	info, err := mgr.Create(backup.CreateOptions{IncludeLists: true})
 	if err != nil {
 		return backup.Info{}, err
 	}
+	if err := a.snapshotPreUpdateBinary(); err != nil {
+		a.ClearPreUpdateRollbackState()
+		return backup.Info{}, fmt.Errorf("снимок bin/zator: %w", err)
+	}
 	a.RememberPreUpdateBackup(info.Name)
-	_ = a.snapshotPreUpdateBinary()
 	return info, nil
 }
 

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/AloofLibra/zator/internal/domains"
 )
 
 func domainItems(t *testing.T, e *env, list string) []map[string]any {
@@ -219,7 +221,8 @@ func TestDomainsCustomRKN(t *testing.T) {
 	wantOK(t, resp, out)
 	resp, out = e.post("/cgi-bin/domains.cgi", "list", "custom_rkn", "action", "clear_strategy", "domain", "dw.com")
 	wantOK(t, resp, out)
-	if items = domainItems(t, e, "custom_rkn"); items[0]["strategy"] != float64(0) {
+	// strategy < 1 не отдаём (пустое поле в UI).
+	if items = domainItems(t, e, "custom_rkn"); items[0]["strategy"] != nil {
 		t.Errorf("clear_strategy: %v", items)
 	}
 
@@ -259,7 +262,10 @@ func TestRenameLocksRollbackOnSetLockError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := e.srv.renameLocks("old.example", "new.example"); err == nil {
+	if _, _, err := e.srv.domains.Add(domains.KindCustom, "old.example"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.srv.domains.Rename(domains.KindCustom, "old.example", "new.example"); err == nil {
 		t.Fatal("ожидалась ошибка SetLock")
 	}
 	if st, _ := store.GetLock("default", "old.example", "tls"); st != 3 {
@@ -413,5 +419,60 @@ func wantError2(t *testing.T, resp *http.Response, body []byte, status int, msg 
 	t.Helper()
 	if resp.StatusCode != status || !strings.Contains(string(body), msg) {
 		t.Fatalf("status=%d body=%s, want %d %q", resp.StatusCode, body, status, msg)
+	}
+}
+
+func TestExtractPlainTarRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	arc := filepath.Join(dir, "bad.tar")
+	f, err := os.Create(arc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw := tar.NewWriter(f)
+	if err := tw.WriteHeader(&tar.Header{Name: "lists/link", Typeflag: tar.TypeSymlink, Linkname: "/etc/passwd", Mode: 0o644}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(dir, "out")
+	err = extractPlainTar(arc, dest)
+	if err == nil || !strings.Contains(err.Error(), "недопустимый тип") {
+		t.Fatalf("want type reject, got %v", err)
+	}
+}
+
+func TestExtractPlainTarOK(t *testing.T) {
+	dir := t.TempDir()
+	arc := filepath.Join(dir, "ok.tar")
+	f, err := os.Create(arc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw := tar.NewWriter(f)
+	body := []byte("FWTYPE=iptables\n")
+	if err := tw.WriteHeader(&tar.Header{Name: "config", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(body))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(dir, "out")
+	if err := extractPlainTar(arc, dest); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(dest, "config"))
+	if err != nil || string(got) != string(body) {
+		t.Fatalf("config = %q err=%v", got, err)
 	}
 }

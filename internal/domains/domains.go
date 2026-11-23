@@ -92,8 +92,6 @@ const MaxEntryLength = 253
 var (
 	// hostRe — имя хоста из меток [a-z0-9-]; допускает одну метку (netrogat).
 	hostRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$`)
-	// substrRe — подстрока: печатные ASCII без пробелов и '#'.
-	substrRe = regexp.MustCompile(`^[a-z0-9._*/:@%~+=-]+$`)
 )
 
 // NormalizeDomain приводит ввод пользователя (домен или URL) к имени хоста
@@ -133,10 +131,11 @@ func NormalizeDomain(input string, requireDot bool) (string, error) {
 	return s, nil
 }
 
-// NormalizeSubstring проверяет и нормализует подстроку (нижний регистр, без пробелов).
+// NormalizeSubstring проверяет подстроку. Регистр сохраняется (контракт Web UI);
+// пустые строки и комментарии (#…) отклоняются.
 func NormalizeSubstring(input string) (string, error) {
-	s := strings.ToLower(strings.TrimSpace(input))
-	if s == "" || len(s) > MaxEntryLength || strings.HasPrefix(s, "#") || !substrRe.MatchString(s) {
+	s := strings.TrimSpace(input)
+	if s == "" || len(s) > MaxEntryLength || strings.HasPrefix(s, "#") {
 		return "", fmt.Errorf("%w: подстрока %q", ErrInvalid, input)
 	}
 	return s, nil
@@ -159,16 +158,39 @@ func Normalize(kind Kind, input string) (string, error) {
 type Manager struct {
 	// Dir — каталог списков (paths.Paths.ListsDir).
 	Dir string
+	// ExtraDir — каталог пользовательских стратегий (ExtraStratsDir):
+	// TCP_Custom.txt и TCP_RKN_domains_by_substring.txt. Пусто — Dir.
+	ExtraDir string
 	// Locks — хранилище фиксаций стратегий; nil отключает работу со стратегиями.
 	Locks *orchestra.Store
 
 	mu sync.Mutex
 }
 
-// New создаёт менеджер для раскладки p (списки в p.ListsDir, фиксации в
-// p.StateOrchestraDir()).
+// New создаёт менеджер для раскладки p (списки в p.ListsDir, custom/substring
+// в p.ExtraStratsDir, фиксации в p.StateOrchestraDir()).
 func New(p paths.Paths) *Manager {
-	return &Manager{Dir: p.ListsDir, Locks: orchestra.NewStore(p.StateOrchestraDir())}
+	return &Manager{
+		Dir:      p.ListsDir,
+		ExtraDir: p.ExtraStratsDir,
+		Locks:    orchestra.NewStore(p.StateOrchestraDir()),
+	}
+}
+
+// KindFromAPIList мапит имя списка Web API (`list=`) на Kind.
+// Неизвестные имена (в т.ч. googlevideo) — false.
+func KindFromAPIList(list string) (Kind, bool) {
+	switch list {
+	case "netrogat":
+		return KindNetrogat, true
+	case "custom_rkn":
+		return KindCustom, true
+	case "substring":
+		return KindRKNSubstrings, true
+	case "netrogat_substring":
+		return KindNetrogatSubstrings, true
+	}
+	return "", false
 }
 
 // Path возвращает путь к файлу списка.
@@ -177,7 +199,11 @@ func (m *Manager) Path(kind Kind) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("%w: неизвестный список %q", ErrInvalid, kind)
 	}
-	return filepath.Join(m.Dir, name), nil
+	dir := m.Dir
+	if (kind == KindCustom || kind == KindRKNSubstrings) && m.ExtraDir != "" {
+		dir = m.ExtraDir
+	}
+	return filepath.Join(dir, name), nil
 }
 
 // Ensure создаёт каталог и пустой файл списка, если их нет.
@@ -329,8 +355,14 @@ func (m *Manager) AddWithStrategy(domain string, strategy orchestra.Strategy) (a
 	return added, nil
 }
 
-// SetStrategy фиксирует TLS-стратегию для домена, уже присутствующего в TCP_Custom.
+// SetStrategy фиксирует TLS-стратегию для домена в default-scope.
 func (m *Manager) SetStrategy(domain string, strategy orchestra.Strategy) error {
+	return m.SetStrategyInScope(orchestra.ScopeDefault, domain, strategy)
+}
+
+// SetStrategyInScope фиксирует TLS-стратегию для домена в указанном client-scope.
+// Домен должен уже быть в TCP_Custom.
+func (m *Manager) SetStrategyInScope(scope, domain string, strategy orchestra.Strategy) error {
 	if m.Locks == nil {
 		return fmt.Errorf("%w: хранилище стратегий не настроено", ErrInvalid)
 	}
@@ -345,7 +377,19 @@ func (m *Manager) SetStrategy(domain string, strategy orchestra.Strategy) error 
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrNotFound, norm)
 	}
-	return m.Locks.SetLock(orchestra.ScopeDefault, norm, string(customProto), strategy)
+	return m.Locks.SetLock(scope, norm, string(customProto), strategy)
+}
+
+// ClearStrategy снимает фиксацию TLS-стратегии домена в указанном scope.
+func (m *Manager) ClearStrategy(scope, domain string) error {
+	if m.Locks == nil {
+		return fmt.Errorf("%w: хранилище стратегий не настроено", ErrInvalid)
+	}
+	norm, err := Normalize(KindCustom, domain)
+	if err != nil {
+		return err
+	}
+	return m.Locks.ClearLock(scope, norm, string(customProto))
 }
 
 // Strategy возвращает фиксацию TLS-стратегии домена (default-scope);
@@ -371,6 +415,11 @@ type Entry struct {
 
 // ListWithStrategies возвращает записи списка со стратегиями default-scope.
 func (m *Manager) ListWithStrategies(kind Kind) ([]Entry, error) {
+	return m.ListWithStrategiesInScope(kind, orchestra.ScopeDefault)
+}
+
+// ListWithStrategiesInScope возвращает записи со стратегиями в указанном scope.
+func (m *Manager) ListWithStrategiesInScope(kind Kind, scope string) ([]Entry, error) {
 	items, err := m.List(kind)
 	if err != nil {
 		return nil, err
@@ -379,7 +428,7 @@ func (m *Manager) ListWithStrategies(kind Kind) ([]Entry, error) {
 	for _, it := range items {
 		e := Entry{Value: it, Strategy: orchestra.StrategyAuto}
 		if kind.HasStrategies() && m.Locks != nil && orchestra.IsCustomDomain(it) {
-			st, err := m.Locks.GetLock(orchestra.ScopeDefault, it, string(customProto))
+			st, err := m.Locks.GetLock(scope, it, string(customProto))
 			if err != nil {
 				return nil, err
 			}
@@ -388,6 +437,69 @@ func (m *Manager) ListWithStrategies(kind Kind) ([]Entry, error) {
 		out = append(out, e)
 	}
 	return out, nil
+}
+
+// Import добавляет несколько записей из сырого текста (разделители: пробел,
+// перевод строки, запятая, точка с запятой). Строки с '#' пропускаются.
+func (m *Manager) Import(kind Kind, raw string) (added, duplicates, skipped int, err error) {
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == '\n' || r == '\r' || r == '\t' || r == ' ' || r == ',' || r == ';'
+	})
+	for _, f := range fields {
+		if strings.HasPrefix(f, "#") {
+			continue
+		}
+		_, ok, aerr := m.Add(kind, f)
+		if aerr != nil {
+			if errors.Is(aerr, ErrInvalid) {
+				skipped++
+				continue
+			}
+			return added, duplicates, skipped, aerr
+		}
+		if ok {
+			added++
+		} else {
+			duplicates++
+		}
+	}
+	return added, duplicates, skipped, nil
+}
+
+// Clear удаляет все записи списка. Для KindCustom дополнительно снимает
+// фиксации стратегий; lockFailures — число доменов, у которых ClearEverywhere
+// вернул ошибку (сам список при этом уже очищен).
+func (m *Manager) Clear(kind Kind) (cleared int, lockFailures int, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	path, err := m.Path(kind)
+	if err != nil {
+		return 0, 0, err
+	}
+	lines, err := readRaw(path)
+	if err != nil {
+		return 0, 0, err
+	}
+	var entries []string
+	for _, l := range lines {
+		if isEntry(l) {
+			entries = append(entries, strings.TrimSpace(l))
+		}
+	}
+	if err := writeRaw(path, nil); err != nil {
+		return 0, 0, err
+	}
+	if kind.HasStrategies() && m.Locks != nil {
+		for _, e := range entries {
+			if !orchestra.IsCustomDomain(e) {
+				continue
+			}
+			if cerr := m.Locks.ClearEverywhere(e, string(customProto)); cerr != nil {
+				lockFailures++
+			}
+		}
+	}
+	return len(entries), lockFailures, nil
 }
 
 // Remove удаляет запись из списка. removed=false, если записи не было.
@@ -459,6 +571,7 @@ func (m *Manager) Rename(kind Kind, oldEntry, newEntry string) error {
 	if idx < 0 {
 		return fmt.Errorf("%w: %s", ErrNotFound, oldN)
 	}
+	prev := lines[idx]
 	lines[idx] = newN
 	if err := writeRaw(path, lines); err != nil {
 		return err
@@ -466,22 +579,37 @@ func (m *Manager) Rename(kind Kind, oldEntry, newEntry string) error {
 	if oldN == newN || !kind.HasStrategies() || m.Locks == nil {
 		return nil
 	}
-	return m.moveLocks(oldN, newN)
+	if err := m.moveLocks(oldN, newN); err != nil {
+		lines[idx] = prev
+		_ = writeRaw(path, lines) // откат имени — лок не перенесён
+		return err
+	}
+	return nil
 }
 
 // moveLocks переносит фиксации домена old на new во всех scope.
+// При ошибке SetLock откатывает уже записанные new-локи и не трогает old.
 func (m *Manager) moveLocks(oldN, newN string) error {
-	recs, err := m.Locks.ListAllLocks()
+	scopes, err := m.Locks.ListScopes()
 	if err != nil {
 		return err
 	}
-	for _, r := range recs {
-		if r.Profile != oldN || r.Proto != customProto {
+	type moved struct {
+		scope string
+	}
+	var done []moved
+	for _, sc := range scopes {
+		st, err := m.Locks.GetLock(sc, oldN, string(customProto))
+		if err != nil || st.IsAuto() {
 			continue
 		}
-		if err := m.Locks.SetLock(r.Scope, newN, string(r.Proto), r.Strategy); err != nil {
+		if err := m.Locks.SetLock(sc, newN, string(customProto), st); err != nil {
+			for _, mvd := range done {
+				_ = m.Locks.ClearLock(mvd.scope, newN, string(customProto))
+			}
 			return err
 		}
+		done = append(done, moved{scope: sc})
 	}
 	return m.Locks.ClearEverywhere(oldN, string(customProto))
 }

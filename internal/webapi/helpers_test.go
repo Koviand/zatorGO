@@ -135,6 +135,7 @@ type envOpts struct {
 
 func newEnv(t *testing.T, o envOpts) *env {
 	t.Helper()
+	resetLoginAttempts()
 	root := t.TempDir()
 	p := paths.New(filepath.Join(root, "zator"), filepath.Join(root, "zapret2"))
 	a := app.NewWith(p, platform.Platform{})

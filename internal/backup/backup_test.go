@@ -87,7 +87,7 @@ func (e *env) seed(t *testing.T) {
 	write(t, p.ZapretConfig, oldConfig)
 	write(t, filepath.Join(p.ListsDir, "netrogat.txt"), "a.com\nb.com\n")
 	write(t, filepath.Join(p.ListsDir, "netrogat_substrings.txt"), "google\n")
-	write(t, filepath.Join(p.ListsDir, "TCP_Custom.txt"), "my.example.org\n")
+	write(t, filepath.Join(p.ExtraStratsDir, "TCP_Custom.txt"), "my.example.org\n")
 	write(t, filepath.Join(p.ListsDir, "russia-youtube.txt"), "youtube.com\n") // не входит без IncludeLists
 	write(t, p.LockedTSV, "1\ttls\t7\nmy.example.org\ttls\t3\n")
 	write(t, p.LockedManualTSV, "2\ttls\t4\n")
@@ -275,7 +275,7 @@ func TestRestoreFullRoundTrip(t *testing.T) {
 	// Портим состояние.
 	write(t, e.p.ZapretConfig, liveConfig)
 	write(t, filepath.Join(e.p.ListsDir, "netrogat.txt"), "changed.com\n")
-	os.Remove(filepath.Join(e.p.ListsDir, "TCP_Custom.txt"))
+	os.Remove(filepath.Join(e.p.ExtraStratsDir, "TCP_Custom.txt"))
 	write(t, e.p.LockedTSV, "")
 	os.Remove(filepath.Join(e.p.StateOrchestraDir(), "mode_override.tsv"))
 	os.RemoveAll(filepath.Join(e.p.StateOrchestraDir(), "scopes"))
@@ -293,7 +293,7 @@ func TestRestoreFullRoundTrip(t *testing.T) {
 	if read(t, filepath.Join(e.p.ListsDir, "netrogat.txt")) != "a.com\nb.com\n" {
 		t.Error("netrogat not restored")
 	}
-	if read(t, filepath.Join(e.p.ListsDir, "TCP_Custom.txt")) != "my.example.org\n" {
+	if read(t, filepath.Join(e.p.ExtraStratsDir, "TCP_Custom.txt")) != "my.example.org\n" {
 		t.Error("TCP_Custom not restored")
 	}
 	if read(t, e.p.LockedTSV) != "1\ttls\t7\nmy.example.org\ttls\t3\n" {
@@ -577,9 +577,9 @@ func TestRestoreLegacyShellLayout(t *testing.T) {
 	}
 	checks := map[string]string{
 		e.p.ZapretConfig: oldConfig,
-		filepath.Join(e.p.ListsDir, "netrogat.txt"):                     "legacy.com\n",
-		filepath.Join(e.p.ListsDir, "TCP_Custom.txt"):                   "c.example.org\n",
-		filepath.Join(e.p.ListsDir, "TCP_RKN_domains_by_substring.txt"): "rkn\n",
+		filepath.Join(e.p.ListsDir, "netrogat.txt"):                           "legacy.com\n",
+		filepath.Join(e.p.ExtraStratsDir, "TCP_Custom.txt"):                   "c.example.org\n",
+		filepath.Join(e.p.ExtraStratsDir, "TCP_RKN_domains_by_substring.txt"): "rkn\n",
 		e.p.LockedTSV: "1\ttls\t2\n",
 		filepath.Join(e.p.StateOrchestraDir(), "mode_override.tsv"): "1\tclone\n",
 	}

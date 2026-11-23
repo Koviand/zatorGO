@@ -55,10 +55,14 @@ func TestNormalizeDomain(t *testing.T) {
 }
 
 func TestNormalizeSubstring(t *testing.T) {
-	if got, err := NormalizeSubstring("  GoogleVideo "); err != nil || got != "googlevideo" {
+	// Регистр сохраняется (контракт Web UI / TestDomainsSubstring).
+	if got, err := NormalizeSubstring("  Tube "); err != nil || got != "Tube" {
 		t.Fatalf("got %q, %v", got, err)
 	}
-	for _, bad := range []string{"", "   ", "a b", "#comment", "тест"} {
+	if got, err := NormalizeSubstring("a b"); err != nil || got != "a b" {
+		t.Fatalf("space substring: got %q, %v", got, err)
+	}
+	for _, bad := range []string{"", "   ", "#comment"} {
 		if _, err := NormalizeSubstring(bad); !errors.Is(err, ErrInvalid) {
 			t.Errorf("NormalizeSubstring(%q) err = %v, want ErrInvalid", bad, err)
 		}
@@ -98,12 +102,34 @@ func TestPathsUnderListsDir(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if filepath.Dir(path) != p.ListsDir {
-			t.Errorf("%s: %s not under %s", k, path, p.ListsDir)
+		wantDir := p.ListsDir
+		if k == KindCustom || k == KindRKNSubstrings {
+			wantDir = p.ExtraStratsDir
+		}
+		if filepath.Dir(path) != wantDir {
+			t.Errorf("%s: %s not under %s", k, path, wantDir)
 		}
 	}
 	if _, err := m.Path("bogus"); !errors.Is(err, ErrInvalid) {
 		t.Errorf("Path(bogus) err = %v", err)
+	}
+}
+
+func TestKindFromAPIList(t *testing.T) {
+	cases := map[string]Kind{
+		"netrogat":           KindNetrogat,
+		"custom_rkn":         KindCustom,
+		"substring":          KindRKNSubstrings,
+		"netrogat_substring": KindNetrogatSubstrings,
+	}
+	for list, want := range cases {
+		got, ok := KindFromAPIList(list)
+		if !ok || got != want {
+			t.Errorf("KindFromAPIList(%q) = %q, %v", list, got, ok)
+		}
+	}
+	if _, ok := KindFromAPIList("googlevideo"); ok {
+		t.Fatal("googlevideo должен оставаться вне domains.Kind")
 	}
 }
 
@@ -243,8 +269,9 @@ func TestSubstringLists(t *testing.T) {
 		if _, ok, err := m.Add(k, "Google"); err != nil || !ok {
 			t.Fatalf("%s Add = %v, %v", k, ok, err)
 		}
-		if _, _, err := m.Add(k, "with space"); !errors.Is(err, ErrInvalid) {
-			t.Errorf("%s Add space err = %v", k, err)
+		// Регистр сохраняется; дубликат без учёта регистра.
+		if n, ok, err := m.Add(k, "google"); err != nil || ok || n != "google" {
+			t.Errorf("%s Add dup = %q, %v, %v", k, n, ok, err)
 		}
 		if err := m.Rename(k, "google", "gstatic"); err != nil {
 			t.Fatal(err)
@@ -256,6 +283,21 @@ func TestSubstringLists(t *testing.T) {
 		if ok, _ := m.Remove(k, "gstatic"); !ok {
 			t.Errorf("%s Remove failed", k)
 		}
+	}
+}
+
+func TestImportClear(t *testing.T) {
+	m, _ := newMgr(t)
+	added, dups, skipped, err := m.Import(KindNetrogat, "a.com\nb.com,a.com\n#x\n-bad.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added != 2 || dups != 1 || skipped != 1 {
+		t.Fatalf("Import = %d/%d/%d", added, dups, skipped)
+	}
+	cleared, fails, err := m.Clear(KindNetrogat)
+	if err != nil || cleared != 2 || fails != 0 {
+		t.Fatalf("Clear = %d, %d, %v", cleared, fails, err)
 	}
 }
 

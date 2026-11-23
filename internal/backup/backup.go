@@ -102,14 +102,37 @@ func stateOrchestraFiles() []string {
 	}
 }
 
-// stateListFiles — списки, входящие в бэкап всегда.
+// stateListFiles — списки в ListsDir, входящие в бэкап всегда.
 func stateListFiles() []string {
 	return []string{
 		"netrogat.txt",
 		"netrogat_substrings.txt",
+	}
+}
+
+// stateExtraFiles — пользовательские списки в ExtraStratsDir (с fallback в ListsDir).
+func stateExtraFiles() []string {
+	return []string{
 		"TCP_Custom.txt",
 		"TCP_RKN_domains_by_substring.txt",
 	}
+}
+
+func (m *Manager) extraOrListsPath(name string) string {
+	if m.Paths.ExtraStratsDir != "" {
+		p := filepath.Join(m.Paths.ExtraStratsDir, name)
+		if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() {
+			return p
+		}
+	}
+	return filepath.Join(m.Paths.ListsDir, name)
+}
+
+func (m *Manager) extraDest(name string) string {
+	if m.Paths.ExtraStratsDir != "" {
+		return filepath.Join(m.Paths.ExtraStratsDir, name)
+	}
+	return filepath.Join(m.Paths.ListsDir, name)
 }
 
 // Info описывает архив бэкапа.
@@ -157,6 +180,9 @@ type CreateOptions struct {
 	// IncludeLists добавляет в архив все файлы каталога lists (а не только
 	// пользовательские списки доменов).
 	IncludeLists bool
+	// IncludeExtra добавляет все обычные файлы ExtraStratsDir как extra_strats/…
+	// (UI-бэкап). Известные TCP_Custom / RKN substring и так попадают в lists/.
+	IncludeExtra bool
 	// SkipConfig не включает config zapret2 в архив.
 	SkipConfig bool
 }
@@ -185,6 +211,10 @@ func (m *Manager) collect(opts CreateOptions) ([]fileEntry, error) {
 	for _, f := range stateListFiles() {
 		add(entryLists+"/"+f, filepath.Join(m.Paths.ListsDir, f))
 	}
+	for _, f := range stateExtraFiles() {
+		// В архиве канон — lists/<file>; источник — ExtraStratsDir при наличии.
+		add(entryLists+"/"+f, m.extraOrListsPath(f))
+	}
 	if opts.IncludeLists {
 		err := filepath.WalkDir(m.Paths.ListsDir, func(p string, d fs.DirEntry, err error) error {
 			if err != nil {
@@ -201,6 +231,35 @@ func (m *Manager) collect(opts CreateOptions) ([]fileEntry, error) {
 				return err
 			}
 			add(entryLists+"/"+filepath.ToSlash(rel), p)
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	if opts.IncludeExtra && m.Paths.ExtraStratsDir != "" {
+		err := filepath.WalkDir(m.Paths.ExtraStratsDir, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					return nil
+				}
+				return err
+			}
+			if !d.Type().IsRegular() {
+				return nil
+			}
+			rel, err := filepath.Rel(m.Paths.ExtraStratsDir, p)
+			if err != nil {
+				return err
+			}
+			base := path.Base(filepath.ToSlash(rel))
+			// Уже учтены как lists/TCP_*.txt — не дублируем.
+			if base == "TCP_Custom.txt" || base == "TCP_RKN_domains_by_substring.txt" {
+				if !strings.Contains(filepath.ToSlash(rel), "/") {
+					return nil
+				}
+			}
+			add("extra_strats/"+filepath.ToSlash(rel), p)
 			return nil
 		})
 		if err != nil {
@@ -750,6 +809,9 @@ func (m *Manager) RestoreFile(archive string, opts RestoreOptions) (*Result, err
 			}
 			return nil, err
 		}
+		if err := config.ValidateSourceSafe(string(data)); err != nil {
+			return nil, fmt.Errorf("backup: опасный config в архиве: %w", err)
+		}
 		if err := writeLocked(m.Paths.ZapretConfig, data); err != nil {
 			rollback()
 			return nil, err
@@ -822,14 +884,24 @@ func (m *Manager) destFor(name string) string {
 	name = path.Clean(name)
 	switch {
 	case strings.HasPrefix(name, entryLists+"/"):
-		return filepath.Join(m.Paths.ListsDir, filepath.FromSlash(strings.TrimPrefix(name, entryLists+"/")))
+		rel := strings.TrimPrefix(name, entryLists+"/")
+		base := path.Base(rel)
+		if base == "TCP_Custom.txt" || base == "TCP_RKN_domains_by_substring.txt" {
+			return m.extraDest(base)
+		}
+		return filepath.Join(m.Paths.ListsDir, filepath.FromSlash(rel))
 	case strings.HasPrefix(name, entryOrch+"/"):
 		return filepath.Join(m.Paths.StateOrchestraDir(), filepath.FromSlash(strings.TrimPrefix(name, entryOrch+"/")))
-	// Раскладка shell-версии.
+	case strings.HasPrefix(name, "orchestra_state/"):
+		// Старый webui-layout.
+		return filepath.Join(m.Paths.StateOrchestraDir(), filepath.FromSlash(strings.TrimPrefix(name, "orchestra_state/")))
+	// Раскладка shell-версии / webui.
 	case strings.HasPrefix(name, "extra_strats/cache/orchestra/"):
 		return filepath.Join(m.Paths.StateOrchestraDir(), filepath.FromSlash(strings.TrimPrefix(name, "extra_strats/cache/orchestra/")))
 	case name == "extra_strats/TCP_Custom.txt" || name == "extra_strats/TCP_RKN_domains_by_substring.txt":
-		return filepath.Join(m.Paths.ListsDir, path.Base(name))
+		return m.extraDest(path.Base(name))
+	case strings.HasPrefix(name, "extra_strats/"):
+		return filepath.Join(m.Paths.ExtraStratsDir, filepath.FromSlash(strings.TrimPrefix(name, "extra_strats/")))
 	}
 	return ""
 }

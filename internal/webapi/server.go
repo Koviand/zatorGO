@@ -38,6 +38,7 @@ import (
 
 	"github.com/AloofLibra/zator/internal/app"
 	"github.com/AloofLibra/zator/internal/config"
+	"github.com/AloofLibra/zator/internal/domains"
 	"github.com/AloofLibra/zator/internal/netcheck"
 	"github.com/AloofLibra/zator/internal/orchestra"
 	"github.com/AloofLibra/zator/internal/paths"
@@ -105,6 +106,7 @@ type Server struct {
 	paths    paths.Paths
 	static   fs.FS
 	store    *orchestra.Store
+	domains  *domains.Manager
 	svc      service.Manager
 	svcErr   error
 	checker  NetChecker
@@ -164,6 +166,8 @@ func New(opts Options) (*Server, error) {
 	}
 	s.store = orchestra.NewStore(s.paths.StateOrchestraDir())
 	s.store.MaxStrategy = s.maxStrategy
+	s.domains = domains.New(s.paths)
+	s.domains.Locks = s.store // один Store на каталог orchestra
 	return s, nil
 }
 
