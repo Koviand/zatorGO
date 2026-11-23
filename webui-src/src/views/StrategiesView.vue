@@ -84,11 +84,12 @@ onMounted(async () => {
   const q = String(route.query.scope || '')
   if (q && q !== scope.value) {
     scope.value = q
-    try {
-      await refreshAll()
-    } catch (e) {
-      showToast((e as Error).message, 'error')
-    }
+  }
+  // Всегда подтягиваем локи для текущего scope ( Domains мог сменить scope без refreshAll ).
+  try {
+    await refreshAll()
+  } catch (e) {
+    showToast((e as Error).message, 'error')
   }
   if (statusLoaded.value) focusProfilesFromQuery()
 })

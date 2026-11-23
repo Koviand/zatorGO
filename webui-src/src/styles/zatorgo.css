@@ -25,9 +25,10 @@ html[data-theme="light"] {
   --radius: 10px;
   --radius-sm: 8px;
   --success: var(--ok);
-  --font-display: "Outfit", "Avenir Next", "Segoe UI", sans-serif;
-  --font-body: "IBM Plex Sans", "Segoe UI", sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  /* Без внешних шрифтов: Web UI должен открываться без интернета / при DPI. */
+  --font-display: "Segoe UI Variable", "Segoe UI", "Avenir Next", "Helvetica Neue", sans-serif;
+  --font-body: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --bg: var(--bg0);
   --panel: var(--surface-2);

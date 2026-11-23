@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { api, formBody } from './api/client'
 import { logout as apiLogout, serviceAction } from './api/endpoints'
@@ -11,6 +11,8 @@ import { showToast } from './stores/toast'
 import { theme, type ThemeMode } from './stores/theme'
 import ToastHost from './components/ui/ToastHost.vue'
 import ConfirmDialog from './components/ui/ConfirmDialog.vue'
+
+const STATUS_POLL_MS = 15_000
 
 const route = useRoute()
 const tabs = [
@@ -31,6 +33,10 @@ const loginPass = ref('')
 const loginError = ref('')
 const loginBusy = ref(false)
 const logoutBusy = ref(false)
+const bootstrapError = ref('')
+const bootstrapBusy = ref(false)
+let pollTimer = 0
+let pollInFlight = false
 
 const running = computed(() => Boolean(status.value?.zapret2_running))
 const healthOverall = computed(() => status.value?.health?.overall || (running.value ? 'ok' : 'down'))
@@ -52,10 +58,50 @@ function setTheme(mode: ThemeMode) {
   theme.value = mode
 }
 
+function stopStatusPoll() {
+  window.clearTimeout(pollTimer)
+  pollTimer = 0
+}
+
+function scheduleStatusPoll() {
+  stopStatusPoll()
+  if (needLogin.value || !!bootstrapError.value || document.hidden) return
+  pollTimer = window.setTimeout(() => { void pollStatus() }, STATUS_POLL_MS)
+}
+
+async function pollStatus() {
+  if (pollInFlight || needLogin.value || !!bootstrapError.value || document.hidden || busyActive.value) {
+    scheduleStatusPoll()
+    return
+  }
+  pollInFlight = true
+  try {
+    await refreshAll()
+  } catch {
+    // фоновый опрос: тосты не спамим
+  } finally {
+    pollInFlight = false
+    scheduleStatusPoll()
+  }
+}
+
+function onVisibilityChange() {
+  if (document.hidden) {
+    stopStatusPoll()
+    return
+  }
+  if (statusLoaded.value && !needLogin.value && !bootstrapError.value) {
+    void pollStatus()
+  }
+}
+
 async function bootstrap() {
+  bootstrapBusy.value = true
+  bootstrapError.value = ''
   try {
     await fetchAndApplyState()
     clearLoginGate()
+    scheduleStatusPoll()
   } catch (e) {
     const err = e as Error & { status?: number }
     if (err.status === 401) {
@@ -63,7 +109,10 @@ async function bootstrap() {
       return
     }
     statusLoaded.value = false
-    showToast(err.message, 'error')
+    bootstrapError.value = err.message || 'Не удалось загрузить состояние'
+    stopStatusPoll()
+  } finally {
+    bootstrapBusy.value = false
   }
 }
 
@@ -75,6 +124,7 @@ async function submitLogin() {
     loginPass.value = ''
     clearLoginGate()
     statusLoaded.value = false
+    // При ошибке bootstrap покажется экран «Повторить», а не пустая оболочка.
     await bootstrap()
   } catch (e) {
     loginError.value = (e as Error).message
@@ -86,6 +136,7 @@ async function submitLogin() {
 async function logout() {
   if (!authRequired.value) return
   logoutBusy.value = true
+  stopStatusPoll()
   try {
     try {
       await apiLogout()
@@ -95,6 +146,7 @@ async function logout() {
     forceLogin()
     loginPass.value = ''
     loginError.value = ''
+    bootstrapError.value = ''
   } finally {
     logoutBusy.value = false
   }
@@ -105,6 +157,11 @@ async function stripSvc(action: 'start' | 'stop') {
     await withBusy(`strip-${action}`, async () => {
       await serviceAction(action)
       await refreshAll()
+      // start асинхронный — короткий догон статуса для шапки.
+      if (action === 'start') {
+        await new Promise((r) => setTimeout(r, 1500))
+        try { await refreshAll() } catch { /* ignore */ }
+      }
     })
     showToast(action === 'stop' ? 'zapret2 остановлен' : 'zapret2 запущен')
   } catch (e) {
@@ -112,7 +169,14 @@ async function stripSvc(action: 'start' | 'stop') {
   }
 }
 
-onMounted(() => { void bootstrap() })
+onMounted(() => {
+  document.addEventListener('visibilitychange', onVisibilityChange)
+  void bootstrap()
+})
+onUnmounted(() => {
+  stopStatusPoll()
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+})
 </script>
 
 <template>
@@ -128,6 +192,17 @@ onMounted(() => { void bootstrap() })
       </label>
       <button type="submit" class="primary" :disabled="loginBusy || !loginPass">Войти</button>
     </form>
+  </div>
+  <div v-else-if="bootstrapError" class="login-screen">
+    <div class="login-card">
+      <img class="login-logo" :src="'./icon.png'" width="72" height="72" alt="ZatorGO">
+      <div class="login-brand">Zator<span>GO</span></div>
+      <p>Не удалось загрузить состояние</p>
+      <p class="login-err">{{ bootstrapError }}</p>
+      <button type="button" class="primary" :disabled="bootstrapBusy" @click="bootstrap">
+        {{ bootstrapBusy ? 'Повтор…' : 'Повторить' }}
+      </button>
+    </div>
   </div>
   <div v-else class="shell">
     <aside class="rail" aria-label="Навигация">

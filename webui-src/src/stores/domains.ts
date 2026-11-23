@@ -35,6 +35,16 @@ export const expandedDomain = ref<string | null>(null)
 // обновление — кнопкой «Обновить» и точечно после мутаций
 export const domainsLoaded = ref(false)
 
+/** Сброс кэша списков (logout / restore / смена сессии). */
+export function resetDomains() {
+  for (const name of DOMAIN_LISTS) {
+    domainLists[name] = null
+  }
+  for (const key of Object.keys(domainChecks)) delete domainChecks[key]
+  expandedDomain.value = null
+  domainsLoaded.value = false
+}
+
 export async function refreshDomainList(name: DomainListName): Promise<boolean> {
   try {
     domainLists[name] = await fetchDomainsList(name, scope.value || 'default')

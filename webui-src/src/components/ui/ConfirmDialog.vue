@@ -4,6 +4,7 @@ import { confirmState, settleConfirm } from '../../stores/confirm'
 
 const visible = ref(false)
 const confirmButton = ref<HTMLButtonElement | null>(null)
+const cancelButton = ref<HTMLButtonElement | null>(null)
 
 const messageParts = computed(() => {
   const message = confirmState.value?.message
@@ -16,10 +17,14 @@ function onKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') {
     event.preventDefault()
     settleConfirm(false)
-  } else if (event.key === 'Enter') {
-    event.preventDefault()
-    settleConfirm(true)
+    return
   }
+  if (event.key !== 'Enter') return
+  // danger: Enter не подтверждает (только клик); иначе — только если фокус на кнопке подтверждения.
+  if (confirmState.value.danger) return
+  if (document.activeElement !== confirmButton.value) return
+  event.preventDefault()
+  settleConfirm(true)
 }
 
 watch(confirmState, (value) => {
@@ -27,7 +32,10 @@ watch(confirmState, (value) => {
   visible.value = false
   requestAnimationFrame(() => {
     visible.value = true
-    nextTick(() => confirmButton.value?.focus())
+    nextTick(() => {
+      if (value.danger) cancelButton.value?.focus()
+      else confirmButton.value?.focus()
+    })
   })
 })
 
@@ -42,7 +50,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown, true))
       <h3 class="modal-title">{{ confirmState.title }}</h3>
       <p v-for="(part, index) in messageParts" :key="index" class="modal-message">{{ part }}</p>
       <div class="modal-actions">
-        <button v-if="!confirmState.info" type="button" class="ghost modal-cancel" @click="settleConfirm(false)">
+        <button v-if="!confirmState.info" ref="cancelButton" type="button" class="ghost modal-cancel" @click="settleConfirm(false)">
           {{ confirmState.cancelText || 'Отмена' }}
         </button>
         <button ref="confirmButton" type="button" :class="confirmState.danger ? 'danger modal-confirm' : 'primary modal-confirm'"

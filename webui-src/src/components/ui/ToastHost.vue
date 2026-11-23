@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from 'vue'
-import { toast, type ToastState } from '../../stores/toast'
+import { advanceToast, toast, type ToastState } from '../../stores/toast'
 import Icon from './Icon.vue'
 
 const current = ref<ToastState | null>(null)
@@ -11,13 +11,21 @@ let removeTimer = 0
 function dismiss() {
   if (!current.value) return
   window.clearTimeout(hideTimer)
+  window.clearTimeout(removeTimer)
   visible.value = false
-  window.setTimeout(() => { current.value = null }, 300)
+  removeTimer = window.setTimeout(() => {
+    current.value = null
+    advanceToast()
+  }, 300)
 }
 
 watch(toast, (value) => {
-  if (!value) return
   window.clearTimeout(removeTimer)
+  if (!value) {
+    current.value = null
+    visible.value = false
+    return
+  }
   current.value = value
   visible.value = false
   requestAnimationFrame(() => { visible.value = true })
@@ -25,7 +33,10 @@ watch(toast, (value) => {
   hideTimer = window.setTimeout(dismiss, value.type === 'error' || value.type === 'warning' ? 8000 : 3500)
 })
 
-onBeforeUnmount(() => window.clearTimeout(hideTimer))
+onBeforeUnmount(() => {
+  window.clearTimeout(hideTimer)
+  window.clearTimeout(removeTimer)
+})
 </script>
 
 <template>

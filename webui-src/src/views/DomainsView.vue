@@ -8,7 +8,7 @@ import {
   refreshDomainList, refreshDomains, type DomainListName,
 } from '../stores/domains'
 import { modeSettings } from '../stores/settings'
-import { scope, scopes } from '../stores/status'
+import { refreshAll, scope, scopes } from '../stores/status'
 import { showToast } from '../stores/toast'
 import { confirmDialog } from '../stores/confirm'
 
@@ -49,9 +49,15 @@ watch(scope, () => {
   if (isGooglevideo.value) void refreshDomainList('googlevideo')
 })
 
-function changeScope(v: string) {
+async function changeScope(v: string) {
   scope.value = v || 'default'
   router.replace({ query: { ...route.query, scope: scope.value } })
+  // Синхронизировать status/locks с выбранным scope (иначе вкладка «Стратегии» видит старые локи).
+  try {
+    await withBusy('domain-scope', () => refreshAll())
+  } catch (e) {
+    showToast((e as Error).message, 'error')
+  }
 }
 
 watch(list, (payload) => {
@@ -62,10 +68,11 @@ watch(list, (payload) => {
     if (!alive.has(key)) delete next[key]
   }
   for (const item of payload.items) {
+    const strat = item.strategy != null && item.strategy >= 1 ? String(item.strategy) : ''
     if (next[item.value] === undefined) {
-      next[item.value] = item.strategy != null ? String(item.strategy) : ''
-    } else if (!String(next[item.value] ?? '').trim() && item.strategy != null) {
-      next[item.value] = String(item.strategy)
+      next[item.value] = strat
+    } else if (!String(next[item.value] ?? '').trim() && strat) {
+      next[item.value] = strat
     }
   }
   strategyDraft.value = next
@@ -80,11 +87,12 @@ async function add() {
   if (!d) return
   try {
     await withBusy('domain-add', async () => {
-      await domains.add(active.value, d, scope.value)
+      const res = await domains.add(active.value, d, scope.value)
       input.value = ''
       await refreshDomainList(active.value)
+      if (res.check) domainChecks[d] = res.check
+      showToast('Добавлено')
     })
-    showToast('Добавлено')
   } catch (e) {
     showToast((e as Error).message, 'error')
   }
@@ -154,8 +162,9 @@ async function setStrategy(domain: string) {
         await domains.clear_strategy(domain, scope.value)
         strategyDraft.value[domain] = ''
       } else {
-        await domains.set_strategy(domain, raw, scope.value)
+        const res = await domains.set_strategy(domain, raw, scope.value)
         strategyDraft.value[domain] = raw
+        if (res.check) domainChecks[domain] = res.check
       }
       await refreshDomainList(active.value)
       showToast((!raw || raw === '0') ? `Стратегия снята с ${domain}` : `Стратегия ${raw} для ${domain}`)
@@ -303,7 +312,7 @@ async function checkDomain(domain: string) {
           </div>
           <div v-if="active === 'custom_rkn'" class="row" style="margin-top:0.45rem">
             <input
-              :value="strategyDraft[item.value] ?? (item.strategy != null ? String(item.strategy) : '')"
+              :value="strategyDraft[item.value] ?? (item.strategy != null && item.strategy >= 1 ? String(item.strategy) : '')"
               type="number" min="1" placeholder="стратегия"
               :disabled="busyActive" style="max-width:7rem"
               @input="strategyDraft[item.value] = ($event.target as HTMLInputElement).value"

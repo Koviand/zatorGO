@@ -1,11 +1,20 @@
-import { forceLogin } from '../stores/auth'
-
 export type ApiOptions = RequestInit & {
   /** Таймаут запроса; по умолчанию 120 с. 0 = без таймаута. */
   timeoutMs?: number
 }
 
 const DEFAULT_TIMEOUT_MS = 120_000
+
+/** Обработчик 401; регистрируется из main.ts, чтобы не замыкать цикл client↔stores. */
+let onUnauthorized: (() => void) | null = null
+
+export function setUnauthorizedHandler(fn: (() => void) | null) {
+  onUnauthorized = fn
+}
+
+function notifyUnauthorized() {
+  onUnauthorized?.()
+}
 
 function isLoginPath(path: string): boolean {
   return path === '/api/login' || path.startsWith('/api/login?')
@@ -20,6 +29,14 @@ function isBareErrorPayload(data: Record<string, unknown>): boolean {
   return Object.keys(data).every((k) => k === 'error')
 }
 
+function withClientHeaders(init: RequestInit = {}): RequestInit {
+  const headers = new Headers(init.headers)
+  if (!headers.has('X-Zator-Client')) {
+    headers.set('X-Zator-Client', 'webui')
+  }
+  return { ...init, headers }
+}
+
 export async function api<T = Record<string, unknown>>(path: string, options: ApiOptions = {}): Promise<T> {
   const { timeoutMs = DEFAULT_TIMEOUT_MS, signal: userSignal, ...rest } = options
   const ctrl = new AbortController()
@@ -30,7 +47,7 @@ export async function api<T = Record<string, unknown>>(path: string, options: Ap
     timer = setTimeout(() => ctrl.abort(), timeoutMs)
   }
   try {
-    const response = await fetch(path, { ...rest, signal: ctrl.signal })
+    const response = await fetch(path, withClientHeaders({ ...rest, signal: ctrl.signal }))
     let data: Record<string, unknown> = {}
     try {
       data = await response.json() as Record<string, unknown>
@@ -40,7 +57,7 @@ export async function api<T = Record<string, unknown>>(path: string, options: Ap
     if (!response.ok) {
       if (response.status === 401) {
         if (!isLoginPath(path)) {
-          forceLogin()
+          notifyUnauthorized()
         }
         const err = new Error(String(data.error || 'Требуется авторизация')) as Error & { status?: number }
         err.status = 401
@@ -79,16 +96,19 @@ export function formBody(params: Record<string, string | number | boolean | unde
   }
   return {
     method: 'POST' as const,
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'X-Zator-Client': 'webui',
+    },
     body: new URLSearchParams(normalized),
   }
 }
 
 /** Скачать бинарный ответ API (бэкапы) с cookie; при 401 → login. */
 export async function downloadBlob(path: string, filename: string): Promise<void> {
-  const response = await fetch(path)
+  const response = await fetch(path, withClientHeaders())
   if (response.status === 401) {
-    if (!isLoginPath(path)) forceLogin()
+    if (!isLoginPath(path)) notifyUnauthorized()
     throw new Error('Требуется авторизация')
   }
   if (!response.ok) {

@@ -32,6 +32,8 @@ router.beforeEach(() => {
     first = false
     return true
   }
+  // Пока state не загружен — не блокируем жёстко: App показывает экран «Повторить».
+  // Тост только если оболочка уже видна (statusLoaded успел стать true и снова сбросился).
   if (!statusLoaded.value) {
     showToast('Дождитесь загрузки состояния', 'error')
     return false

@@ -279,14 +279,23 @@ export interface DomainsListPayload {
 }
 
 export interface ApplyResult {
+  ok?: boolean
   restarted?: boolean
   restart_required?: boolean
-  added?: number
+  /** ports_add отдаёт строку «8080,9000»; domains — число. */
+  added?: number | string
   skipped?: string
   name?: string
   provider?: string
   duplicate?: boolean
   check?: CheckPayload
+}
+
+/** Успешный ответ без полезной нагрузки (service / delete backup). */
+export interface OkResult {
+  ok?: boolean
+  restarted?: boolean
+  restart_required?: boolean
 }
 
 export interface UpdateCheckResult {

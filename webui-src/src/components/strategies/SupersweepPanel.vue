@@ -4,6 +4,7 @@ import { fetchSupersweep, supersweepCancel, supersweepStart } from '../../api/en
 import type { SupersweepPayload } from '../../api/types'
 import { busyActive, busyButton, withBusy } from '../../stores/busy'
 import { confirmDialog } from '../../stores/confirm'
+import { resetDomains } from '../../stores/domains'
 import { refreshAll } from '../../stores/status'
 import { showToast } from '../../stores/toast'
 
@@ -80,6 +81,7 @@ async function refresh() {
     if (!valid(result)) throw new Error('Некорректный ответ сервера')
     if (mounted) {
       if (wasActive && !result.active) {
+        resetDomains()
         refreshAll().catch(() => undefined)
       }
       wasActive = result.active

@@ -1,7 +1,7 @@
 import { api, downloadBlob, formBody } from './client'
 import type {
   ApplyResult, BackupsPayload, CheckPayload, DomainsImportResult, DomainsListPayload,
-  FallbackSettings, IfacesSettings, LockResult, ModeSettingData, PortInfo, PortsSettings, ProfileInfo, ProviderSettings,
+  FallbackSettings, IfacesSettings, LockResult, ModeSettingData, OkResult, PortInfo, PortsSettings, ProfileInfo, ProviderSettings,
   ScopesPayload, StatePayload, StatusPayload, TlsBlobSettings, UdpGamesSettings, UpdateCheckResult,
   WgBlobSettings, WgStateSettings, Recommendations, SupersweepPayload, WssizeRampSettings,
 } from './types'
@@ -45,7 +45,7 @@ export const clearLock = (profile: string, scope: string) =>
     formBody({ profile, scope }))
 
 export const serviceAction = (action: 'start' | 'stop' | 'restart') =>
-  api<Record<string, never>>('/api/service', formBody({ action }))
+  api<OkResult>('/api/service', formBody({ action }))
 
 export const runCheck = () =>
   api<CheckPayload>('/api/check', { method: 'POST' })
@@ -82,6 +82,8 @@ export const fetchSetting = {
   update_check: () => api<UpdateCheckResult>('/api/settings?setting=update_check'),
   wssize_ramp: () => api<WssizeRampSettings>('/api/settings?setting=wssize_ramp'),
   ifaces: () => api<IfacesSettings>('/api/settings?setting=ifaces'),
+  config_raw: () => api<{ content?: string; path?: string; error?: string }>('/api/settings?setting=config_raw'),
+  nfqws2_errors: () => api<{ available?: boolean; content?: string; path?: string; lines?: number }>('/api/settings?setting=nfqws2_errors'),
 }
 
 export const registerStrategy = (opts: {
@@ -154,19 +156,19 @@ export const applySetting = {
     api<ApplyResult>('/api/settings',
       formBody({ setting: postKey, value: enabled ? '1' : '0' })),
   ports_add: (proto: string, value: string) =>
-    api<ApplyResult & { added: number }>('/api/settings',
+    api<ApplyResult>('/api/settings',
       formBody({ setting: 'ports_add', proto, value })),
   ports_remove: (proto: string, value: string) =>
     api<ApplyResult>('/api/settings',
       formBody({ setting: 'ports_remove', proto, value })),
   provider_set: (name: string, city: string) =>
-    api<Record<string, never>>('/api/settings',
+    api<OkResult>('/api/settings',
       formBody({ setting: 'provider_set', name, city })),
   provider_redetect: () =>
     api<ApplyResult>('/api/settings',
       formBody({ setting: 'provider_redetect' })),
   wssize_ramp: (settings: WssizeRampSettings) =>
-    api<ApplyResult & WssizeRampSettings>('/api/settings',
+    api<ApplyResult>('/api/settings',
       formBody({ setting: 'wssize_ramp', value: settings.enabled ? '1' : '0',
         mode: settings.mode, scale: String(settings.scale) })),
   ifaces: (opts: { lan: string; wan: string } | { action: 'redetect' }) =>
@@ -174,6 +176,24 @@ export const applySetting = {
       formBody('action' in opts
         ? { setting: 'ifaces', action: opts.action }
         : { setting: 'ifaces', action: 'set', lan: opts.lan, wan: opts.wan })),
+  /** Простая переменная конфига с белым списком на сервере (fwtype, flowoffload, …). */
+  value: (setting: string, value: string) =>
+    api<ApplyResult>('/api/settings', formBody({ setting, value })),
+  client_scope: (opts: { enable: boolean; mask: string; shift: string; max: string }) =>
+    api<ApplyResult & { enabled?: boolean; warning?: string }>('/api/settings', formBody({
+      setting: 'client_scope',
+      client_scope_enable: opts.enable ? '1' : '0',
+      client_scope_mark_mask: opts.mask,
+      client_scope_mark_shift: opts.shift,
+      client_scope_mark_max: opts.max,
+    })),
+  config_raw: (value: string) =>
+    api<ApplyResult>('/api/settings', formBody({ setting: 'config_raw', value })),
+  update_apply: () =>
+    api<ApplyResult & { up_to_date?: boolean; installed?: number; release?: string; restart_required?: boolean }>(
+      '/api/settings',
+      { ...formBody({ setting: 'update_apply' }), timeoutMs: 200_000 },
+    ),
 }
 
 export const fetchDomainsList = (list: string, scope = 'default') =>
@@ -209,8 +229,8 @@ export const fetchBackups = () => api<BackupsPayload>('/api/backups')
 
 export const backups = {
   create: () => api<{ name: string }>('/api/backups', formBody({ action: 'create' })),
-  delete: (name: string) => api<Record<string, never>>('/api/backups', formBody({ action: 'delete', name })),
-  restore: (name: string, mode: 'full' | 'smart' | 'lists' = 'full') =>
+  delete: (name: string) => api<OkResult>('/api/backups', formBody({ action: 'delete', name })),
+  restore: (name: string, mode: 'full' | 'smart' | 'lists' = 'smart') =>
     api<{ ok: boolean; name: string; files?: number; restarted?: boolean }>(
       '/api/backups', formBody({ action: 'restore', name, mode })),
   downloadUrl: (name: string) => `/api/backups?action=download&name=${encodeURIComponent(name)}`,

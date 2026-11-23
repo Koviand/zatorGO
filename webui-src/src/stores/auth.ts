@@ -1,4 +1,5 @@
 import { ref } from 'vue'
+import { resetDomains } from './domains'
 import { settingsLoaded } from './settings'
 import { statusLoaded } from './status'
 
@@ -10,6 +11,7 @@ export function forceLogin() {
   needLogin.value = true
   statusLoaded.value = false
   settingsLoaded.value = false
+  resetDomains()
 }
 
 export function clearLoginGate() {
