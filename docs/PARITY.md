@@ -28,7 +28,7 @@
 | backups create/list/download/delete/upload | done |
 | scopes | done |
 | settings (~35) | done |
-| supersweep start/status/cancel | done (NoopProbe по умолчанию) |
+| supersweep start/status/cancel | done (`NfqwsProbe`; `NoopProbe` в тестах) |
 | update_check | done (`internal/deploy`) |
 | recommendations | done (`internal/telemetry`) |
 
@@ -40,7 +40,7 @@
 | blob/sni/mode/clonesize overrides | done |
 | auto-sweep | done (`internal/sweep`) |
 | supersweep coordinator + progress files | done |
-| Изолированный nfqws2 probe | stub (`NoopProbe`; интерфейс готов) |
+| Изолированный nfqws2 probe | done (`sweep.NewNfqwsProbe` в webapi supersweep) |
 
 ## Сеть / платформа
 
