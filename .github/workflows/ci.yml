@@ -24,6 +24,8 @@ jobs:
         run: go test ./...
       - name: Vet
         run: go vet ./...
+      - name: Fuzz ValidateSourceSafe (short)
+        run: go test ./internal/config/ -fuzz=FuzzValidateSourceSafe -fuzztime=15s
       - name: Build all release architectures
         run: |
           set -euo pipefail
