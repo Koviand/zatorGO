@@ -323,7 +323,7 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request, p params) {
 		backups = v
 	}
 	out := map[string]any{
-		"auth_required": s.app.Config.AuthRequired(),
+		"auth_required": s.app.AuthRequiredLocked(),
 		"status":        s.statusPayload(r.Context(), scope),
 		"version":       s.versionPayload(),
 		"scopes":        s.scopesPayload(cfg),

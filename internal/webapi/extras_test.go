@@ -38,6 +38,37 @@ func TestConfigRawRejectsWithoutNFQWS2(t *testing.T) {
 	}
 }
 
+func TestConfigRawRejectsShellBreakout(t *testing.T) {
+	e := newEnv(t, envOpts{})
+	evil := "NFQWS2_OPT=\"\n--new\n\"\nFOO=\"\n\"; reboot; echo \"\n"
+	resp, out := e.post("/cgi-bin/settings.cgi", "setting", "config_raw", "value", evil)
+	wantStatus(t, resp, http.StatusBadRequest)
+	if out["error"] == nil {
+		t.Fatal("expected shell-safety error")
+	}
+}
+
+func TestConfigRawWritesBak(t *testing.T) {
+	e := newEnv(t, envOpts{})
+	cfgPath := e.app.Paths.ZapretConfig
+	prev := "NFQWS2_OPT=\"\n--qnum=200\n\"\nFWTYPE=iptables\n"
+	if err := os.WriteFile(cfgPath, []byte(prev), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resp, _ := e.post("/cgi-bin/settings.cgi",
+		"setting", "config_raw",
+		"value", "NFQWS2_OPT=\"\n--qnum=201\n\"\nFWTYPE=nftables\n",
+	)
+	wantStatus(t, resp, 200)
+	bak, err := os.ReadFile(cfgPath + ".bak")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(bak) != prev {
+		t.Fatalf("bak mismatch: %q", bak)
+	}
+}
+
 func TestNfqws2ErrorsGet(t *testing.T) {
 	e := newEnv(t, envOpts{})
 	resp, out := e.get("/cgi-bin/settings.cgi?setting=nfqws2_errors")

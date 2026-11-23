@@ -2,7 +2,6 @@ package webapi
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -10,58 +9,11 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/AloofLibra/zator/internal/config"
 	"github.com/AloofLibra/zator/internal/deploy"
 	"github.com/AloofLibra/zator/internal/fsutil"
 	"github.com/AloofLibra/zator/internal/service"
 )
-
-// validateConfigRawShellSafety отклоняет очевидный shell breakout в zapret2/config
-// (source'ится shell-скриптами). Не парсер shell — практичный фильтр.
-func validateConfigRawShellSafety(content string) error {
-	for _, line := range strings.Split(content, "\n") {
-		trim := strings.TrimSpace(line)
-		if trim == "" || strings.HasPrefix(trim, "#") {
-			continue
-		}
-		if strings.Contains(trim, "$(") || strings.Contains(trim, "`") {
-			return fmt.Errorf("запрещены подстановки $(...) и backtick в config")
-		}
-		if hasUnquotedShellMeta(trim) {
-			return fmt.Errorf("опасные shell-метасимволы (;|&) вне кавычек")
-		}
-	}
-	return nil
-}
-
-func hasUnquotedShellMeta(line string) bool {
-	inDQ, inSQ, esc := false, false, false
-	for _, r := range line {
-		if esc {
-			esc = false
-			continue
-		}
-		if r == '\\' && inDQ {
-			esc = true
-			continue
-		}
-		if r == '"' && !inSQ {
-			inDQ = !inDQ
-			continue
-		}
-		if r == '\'' && !inDQ {
-			inSQ = !inSQ
-			continue
-		}
-		if inDQ || inSQ {
-			continue
-		}
-		switch r {
-		case ';', '|', '&', '\n', '\r':
-			return true
-		}
-	}
-	return false
-}
 
 const (
 	maxConfigRawBytes = 2 << 20 // 2 MiB
@@ -105,7 +57,7 @@ func (s *Server) postConfigRaw(r *http.Request, p params) (map[string]any, error
 	if !strings.Contains(content, "NFQWS2_OPT") {
 		return nil, errf(http.StatusBadRequest, "В конфиге нет NFQWS2_OPT — отказ в записи")
 	}
-	if err := validateConfigRawShellSafety(content); err != nil {
+	if err := config.ValidateSourceSafe(content); err != nil {
 		return nil, errf(http.StatusBadRequest, err.Error())
 	}
 	path := s.paths.ZapretConfig
@@ -113,6 +65,10 @@ func (s *Server) postConfigRaw(r *http.Request, p params) (map[string]any, error
 	defer s.cfgMu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
+	}
+	// Снимок для отката «Вручную» (Manual) — до замены рабочего config.
+	if prev, err := os.ReadFile(path); err == nil && len(prev) > 0 {
+		_ = fsutil.AtomicWriteFile(path+".bak", prev, 0o644)
 	}
 	if err := fsutil.AtomicWriteFile(path, []byte(content), 0o644); err != nil {
 		return nil, err
@@ -154,13 +110,13 @@ func (s *Server) nfqws2ErrorsGet() map[string]any {
 
 func (s *Server) postUpdateApply(r *http.Request, _ params) (map[string]any, error) {
 	out := map[string]any{"ok": true, "up_to_date": false, "installed": 0, "restart_required": false}
-	// Package C: product-backup до Apply (best-effort).
+	// Package C: product-backup до Apply (fail-closed — иначе откат на устаревший архив).
 	if s.app != nil {
-		if info, err := s.app.CreatePreUpdateBackup(); err == nil {
-			out["pre_update_backup"] = info.Name
-		} else {
-			out["pre_update_backup_warning"] = err.Error()
+		info, err := s.app.CreatePreUpdateBackup()
+		if err != nil {
+			return nil, errf(http.StatusInternalServerError, "pre-update backup обязателен: "+err.Error())
 		}
+		out["pre_update_backup"] = info.Name
 	}
 	u := deploy.New(s.paths)
 	off := deploy.ResolveOfflineBundle(os.Getenv)
