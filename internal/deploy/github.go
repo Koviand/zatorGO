@@ -118,7 +118,7 @@ func binaryAssetName() string {
 }
 
 // FindGitHubBinaryURL ищет URL zator-linux-<arch> в latest-релизе.
-// sha — hex из ассета SHA256SUMS (пусто, если файла нет в релизе).
+// sha — обязательный hex из ассета SHA256SUMS (fail-closed без суммы).
 func (u *Updater) FindGitHubBinaryURL(ctx context.Context) (tag, url string, size int64, sha string, err error) {
 	if u.Offline {
 		return "", "", 0, "", ErrOffline
@@ -153,28 +153,37 @@ func (u *Updater) FindGitHubBinaryURL(ctx context.Context) (tag, url string, siz
 	}
 	tag = strings.TrimSpace(rel.TagName)
 	want := binaryAssetName()
-	var sumsURL string
+	var sumsURL, sigURL string
 	for _, a := range rel.Assets {
 		switch {
 		case a.Name == want && a.BrowserDownloadURL != "":
 			url, size = a.BrowserDownloadURL, a.Size
-		case a.Name == "SHA256SUMS" && a.BrowserDownloadURL != "":
+		case a.Name == SHA256SUMSName && a.BrowserDownloadURL != "":
 			sumsURL = a.BrowserDownloadURL
+		case a.Name == SHA256SUMSSigName && a.BrowserDownloadURL != "":
+			sigURL = a.BrowserDownloadURL
 		}
 	}
 	if url == "" {
 		return tag, "", 0, "", fmt.Errorf("deploy: в релизе нет ассета %s", want)
 	}
-	if sumsURL != "" {
-		sha, _ = u.fetchAssetSHA256(ctx, sumsURL, want)
+	if sumsURL == "" {
+		return tag, "", 0, "", fmt.Errorf("deploy: в релизе нет ассета %s", SHA256SUMSName)
+	}
+	if sigURL == "" {
+		return tag, "", 0, "", fmt.Errorf("deploy: в релизе нет ассета %s", SHA256SUMSSigName)
+	}
+	sha, err = u.fetchVerifiedAssetSHA256(ctx, sumsURL, sigURL, want)
+	if err != nil {
+		return tag, "", 0, "", err
 	}
 	return tag, url, size, sha, nil
 }
 
-func (u *Updater) fetchAssetSHA256(ctx context.Context, sumsURL, wantName string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sumsURL, nil)
+func (u *Updater) httpGetLimited(ctx context.Context, rawURL string, limit int64) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	req.Header.Set("User-Agent", fetch.DefaultUserAgent)
 	client := u.fetcher().HTTP
@@ -183,17 +192,42 @@ func (u *Updater) fetchAssetSHA256(ctx context.Context, sumsURL, wantName string
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", &fetch.HTTPError{URL: sumsURL, Status: resp.StatusCode}
+		return nil, &fetch.HTTPError{URL: rawURL, Status: resp.StatusCode}
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+	if err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+// fetchVerifiedAssetSHA256 скачивает SHA256SUMS + .sig, проверяет Ed25519,
+// затем возвращает hex-сумму для wantName (fail-closed).
+func (u *Updater) fetchVerifiedAssetSHA256(ctx context.Context, sumsURL, sigURL, wantName string) (string, error) {
+	sums, err := u.httpGetLimited(ctx, sumsURL, 1<<20)
 	if err != nil {
 		return "", err
 	}
-	return parseSHA256SUMS(body, wantName), nil
+	sig, err := u.httpGetLimited(ctx, sigURL, 1<<16)
+	if err != nil {
+		return "", err
+	}
+	pub, err := ReleasePublicKey()
+	if err != nil {
+		return "", err
+	}
+	if err := VerifySHA256SUMS(pub, sums, sig); err != nil {
+		return "", err
+	}
+	sum := parseSHA256SUMS(sums, wantName)
+	if sum == "" {
+		return "", fmt.Errorf("deploy: в SHA256SUMS нет суммы для %s", wantName)
+	}
+	return sum, nil
 }
 
 func parseSHA256SUMS(body []byte, wantName string) string {

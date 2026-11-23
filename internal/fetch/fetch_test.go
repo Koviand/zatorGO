@@ -270,6 +270,7 @@ func TestSafeUntarRejectsUnsafe(t *testing.T) {
 		"drive":         {{name: "C:/evil", body: "x"}},
 		"symlink-abs":   {{name: "l", typ: tar.TypeSymlink, linkname: "/etc"}},
 		"symlink-up":    {{name: "d/l", typ: tar.TypeSymlink, linkname: "../../x"}},
+		"symlink-dot":   {{name: "s", typ: tar.TypeSymlink, linkname: "."}},
 		"hardlink-up":   {{name: "h", typ: tar.TypeLink, linkname: "../x"}},
 	}
 	for name, entries := range cases {

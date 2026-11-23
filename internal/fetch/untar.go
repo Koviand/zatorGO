@@ -142,9 +142,9 @@ func ValidateTarGz(archive string) error {
 		}
 		switch hdr.Typeflag {
 		case tar.TypeSymlink:
-			if err := checkSymlink(name, hdr.Linkname); err != nil {
-				return err
-			}
+			// Симлинки запрещены целиком: цепочки вроде s→. + t→s/.. обходят
+			// текстовую проверку path.Join и пишут за пределы dest.
+			return fmt.Errorf("%w: символические ссылки запрещены (%q)", ErrUnsafePath, name)
 		case tar.TypeLink:
 			if _, err := CleanEntryName(hdr.Linkname); err != nil {
 				return err
@@ -181,27 +181,12 @@ func ListTarGz(archive string) ([]string, error) {
 			return nil, err
 		}
 		if hdr.Typeflag == tar.TypeSymlink {
-			if err := checkSymlink(name, hdr.Linkname); err != nil {
-				return nil, err
-			}
+			return nil, fmt.Errorf("%w: символические ссылки запрещены (%q)", ErrUnsafePath, name)
 		}
 		if name != "." {
 			names = append(names, name)
 		}
 	}
-}
-
-// checkSymlink отвергает символические ссылки, выходящие за корень архива.
-func checkSymlink(name, link string) error {
-	if link == "" || strings.ContainsRune(link, 0) || strings.Contains(link, `\`) ||
-		strings.HasPrefix(link, "/") || (len(link) >= 2 && link[1] == ':') {
-		return fmt.Errorf("%w: символическая ссылка %q -> %q", ErrUnsafePath, name, link)
-	}
-	resolved := path.Join(path.Dir(name), link)
-	if resolved == ".." || strings.HasPrefix(resolved, "../") {
-		return fmt.Errorf("%w: символическая ссылка %q -> %q", ErrUnsafePath, name, link)
-	}
-	return nil
 }
 
 func joinInside(absDest, rel string) (string, error) {
@@ -242,17 +227,7 @@ func extractEntry(tr *tar.Reader, hdr *tar.Header, absDest, target string) error
 		}
 		return os.Chmod(target, mode)
 	case tar.TypeSymlink:
-		// Относительная цель проверена в ValidateTarGz; дополнительно
-		// убеждаемся, что цель остаётся внутри каталога назначения.
-		resolved := filepath.Join(filepath.Dir(target), filepath.FromSlash(hdr.Linkname))
-		if _, err := joinInside(absDest, mustRel(absDest, resolved)); err != nil {
-			return err
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		_ = os.Remove(target)
-		return os.Symlink(hdr.Linkname, target)
+		return fmt.Errorf("%w: символические ссылки запрещены (%q)", ErrUnsafePath, hdr.Name)
 	default:
 		// Жёсткие ссылки, устройства, FIFO и т.п. не распаковываем.
 		return nil

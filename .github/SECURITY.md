@@ -31,3 +31,24 @@
 - Не используйте `zator install -no-auth` на публичных VPS.
 - Ограничивайте порт `17682` firewall’ом / reverse proxy при необходимости.
 - Проверяйте, что `ZATOR_OWNER` / `ZATOR_REPO` указывают на доверенный репозиторий обновлений.
+
+## Подпись релизов (SHA256SUMS)
+
+Цепочка доверия для install/update:
+
+1. CI подписывает `SHA256SUMS` ключом Ed25519 → ассет `SHA256SUMS.sig`.
+2. `zator-launcher.sh` и in-app update (`internal/deploy`) **fail-closed**: без валидной подписи установка/обновление отклоняется.
+3. Затем сверяется sha256 бинарника с записью в подписанном `SHA256SUMS`.
+
+Публичный ключ вшит в бинарник (`deploy.ReleasePublicKeyB64`) и в launcher (`scripts/release-public.pem`).
+
+Приватный ключ хранится **только** в GitHub Actions secret `ZATOR_RELEASE_SIGNING_KEY` (base64 raw 64-байтного Go `ed25519.PrivateKey`). Не коммитьте его в репозиторий.
+
+Локальная подпись (smoke):
+
+```bash
+go run ./scripts/sign-sha256sums.go -key-file .secrets/release.ed25519.b64 \
+  -in out/SHA256SUMS -out out/SHA256SUMS.sig
+```
+
+Ротация ключа: сгенерировать новую пару, обновить secret, `ReleasePublicKeyB64`, PEM в launcher/`scripts/release-public.pem`, выпустить новый тег.

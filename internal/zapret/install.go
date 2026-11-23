@@ -56,8 +56,11 @@ type Options struct {
 	ReleaseBase string
 	// MirrorBase — зеркало релизов (аналог ZAPRET2_RELEASE_MIRROR_BASE).
 	MirrorBase string
-	// SHA256 — ожидаемая контрольная сумма архива (необязательно).
+	// SHA256 — ожидаемая контрольная сумма архива. Если пусто — при онлайн-установке
+	// сумма берётся из sha256sum.txt релиза (fail-closed).
 	SHA256 string
+	// AllowInsecure — разрешить установку без SHA256 (только осознанный bypass).
+	AllowInsecure bool
 
 	// IncludeLua — дополнительно распаковать lua/ из архива
 	// (zapret-lib.lua, zapret-antidpi.lua и т.д.).
@@ -193,7 +196,25 @@ func DownloadAndInstall(ctx context.Context, opts Options) (*Result, error) {
 
 	asset := AssetName(ver, embedded)
 	archive := filepath.Join(work, asset)
-	if local, ok := resolveLocalArchive(opts, asset); ok {
+	offline := opts.Offline || envTruthy("Z2R_OFFLINE") || envTruthy("ZATOR_OFFLINE")
+	local, hasLocal := resolveLocalArchive(opts, asset)
+
+	if opts.SHA256 == "" && !opts.AllowInsecure {
+		if offline && hasLocal {
+			return nil, fmt.Errorf("zapret: офлайн-установка требует Options.SHA256 (или AllowInsecure)")
+		}
+		sum, err := fetchArchiveSHA256(ctx, client, url, asset)
+		if err != nil {
+			return nil, fmt.Errorf("zapret: SHA256 обязателен (sha256sum.txt): %w", err)
+		}
+		opts.SHA256 = sum
+		opts.logf("SHA256 из sha256sum.txt: %s…", sum[:12])
+	}
+	if opts.SHA256 == "" && opts.AllowInsecure {
+		opts.logf("предупреждение: установка без проверки SHA256 (AllowInsecure)")
+	}
+
+	if hasLocal {
 		opts.logf("локальный архив %s", local)
 		if err := copyFile(local, archive, 0o644); err != nil {
 			return nil, fmt.Errorf("zapret: копирование локального архива: %w", err)
@@ -207,7 +228,6 @@ func DownloadAndInstall(ctx context.Context, opts Options) (*Result, error) {
 		}
 		res.URL = "file://" + filepath.ToSlash(local)
 	} else {
-		offline := opts.Offline || envTruthy("Z2R_OFFLINE") || envTruthy("ZATOR_OFFLINE")
 		if offline {
 			return nil, fmt.Errorf("zapret: офлайн-режим, нет локального архива %s (положите в vendor/ или задайте LocalArchive)", asset)
 		}

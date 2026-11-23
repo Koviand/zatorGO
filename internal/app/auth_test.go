@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestSetPasswordVerifyAndUpdatePreserves(t *testing.T) {
@@ -53,6 +54,101 @@ func TestDisableEnableAuth(t *testing.T) {
 		t.Fatalf("enable without password: %v", err)
 	}
 }
+
+func TestSavePreservesDiskAuthWhenNotDirty(t *testing.T) {
+	a := newTestApp(t)
+	if err := a.SetPassword("secret12"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Save(); err != nil {
+		t.Fatal(err)
+	}
+	cli := NewWith(a.Paths, a.Platform)
+	cli.ConfigPath = a.ConfigPath
+	if err := cli.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cli.SetPassword("newpass12"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cli.Save(); err != nil {
+		t.Fatal(err)
+	}
+	// Имитация живого webui: в памяти старый пароль, Save порта не должен затереть CLI.
+	a.Config.Port = 18080
+	if err := a.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.ReloadAuth(); err != nil {
+		t.Fatal(err)
+	}
+	if !a.VerifyPassword("newpass12") || a.VerifyPassword("secret12") {
+		t.Fatalf("disk auth lost after Save: enabled=%v", a.Config.AuthEnabled)
+	}
+	if a.Config.Port != 18080 {
+		t.Fatalf("port=%d", a.Config.Port)
+	}
+}
+
+func TestConfigExists(t *testing.T) {
+	a := newTestApp(t)
+	if a.ConfigExists() {
+		t.Fatal("expected no config")
+	}
+	if err := a.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if !a.ConfigExists() {
+		t.Fatal("expected config after Save")
+	}
+}
+
+func TestReloadAuthIfStale(t *testing.T) {
+	a := newTestApp(t)
+	if err := a.SetPassword("secret12"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.ReloadAuthIfStale(); err != nil {
+		t.Fatal(err)
+	}
+	prev := a.authFileMod
+	if err := a.ReloadAuthIfStale(); err != nil {
+		t.Fatal(err)
+	}
+	if !a.authFileMod.Equal(prev) {
+		t.Fatal("повторный ReloadAuthIfStale не должен перечитывать без смены mtime")
+	}
+	cli := NewWith(a.Paths, a.Platform)
+	cli.ConfigPath = a.ConfigPath
+	if err := cli.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cli.SetPassword("newpass12"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cli.Save(); err != nil {
+		t.Fatal(err)
+	}
+	// Форсируем более новый mtime (на FS с грубой гранулярностью).
+	newer := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(a.ConfigPath, newer, newer); err != nil {
+		t.Fatal(err)
+	}
+	a.authCheckedAt = time.Time{}
+	if err := a.ReloadAuthIfStale(); err != nil {
+		t.Fatal(err)
+	}
+	if !a.VerifyPassword("newpass12") {
+		t.Fatal("stale reload не подхватил новый пароль")
+	}
+	if !a.AuthRequiredLocked() {
+		t.Fatal("AuthRequiredLocked")
+	}
+}
+
 
 func TestAuthEnabledFromPasswordHash(t *testing.T) {
 	a := newTestApp(t)

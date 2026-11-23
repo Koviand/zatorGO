@@ -10,6 +10,17 @@ dist/
 .env
 .DS_Store
 webui-src/node_modules/
+
+# Приватный ключ подписи релизов (только pubkey в репозитории).
+.secrets/
+
+
+# Утечки ensureHostlistPlaceholders при пустых ListsDir/ExtraStratsDir (cwd).
+/internal/app/TCP_*.txt
+/internal/app/netrogat.txt
+/internal/app/netrogat_substrings.txt
+/internal/app/googlevideo-ipv4.txt
+
 # Локальные архивы zapret2 (кладёт pack-offline.sh); списки/стратегии — в assets/.
 vendor/*.tar.gz
 vendor/zator-linux-*

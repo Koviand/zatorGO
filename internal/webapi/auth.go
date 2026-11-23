@@ -1,12 +1,46 @@
 package webapi
 
 import (
+	"net"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 	"sync"
 	"time"
 )
+
+// ClientHeader — заголовок SPA/клиента; наличие снимает зависимость от Origin
+// для мутаций (и блокирует «простые» cross-site form POST без preflight).
+const ClientHeader = "X-Zator-Client"
+
+// csrfOK защищает мутирующие запросы от cross-site form POST (особенно при
+// auth_enabled=false). GET/HEAD всегда ок. Разрешено, если:
+//   - есть X-Zator-Client / X-Requested-With (не «простой» CORS-запрос), или
+//   - Origin отсутствует (curl/same-origin без Origin), или
+//   - Origin совпадает с Host запроса.
+func csrfOK(r *http.Request) bool {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, "":
+		return true
+	}
+	if r.Header.Get(ClientHeader) != "" || r.Header.Get("X-Requested-With") != "" {
+		return true
+	}
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+	return originMatchesHost(origin, r.Host)
+}
+
+func originMatchesHost(origin, host string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return strings.EqualFold(u.Host, host)
+}
 
 func isPublicAuthPath(p string) bool {
 	switch p {
@@ -62,22 +96,46 @@ func isStaticAsset(p string) bool {
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Подтянуть auth с диска при смене mtime (CLI `zator auth …`), не на каждый запрос.
+		if s.app != nil {
+			_ = s.app.ReloadAuthIfStale()
+		}
 		// Logout: всегда пропускаем до handler — там сами решим rotate vs clear-cookie-only.
 		if r.URL.Path == "/api/logout" || r.URL.Path == "/cgi-bin/logout.cgi" {
+			if !csrfOK(r) {
+				writeError(w, http.StatusForbidden, "Запрос отклонён (CSRF)")
+				return
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
 		if isPublicAuthPath(r.URL.Path) || isStaticAsset(r.URL.Path) {
+			if isPublicAuthPath(r.URL.Path) && !csrfOK(r) {
+				writeError(w, http.StatusForbidden, "Запрос отклонён (CSRF)")
+				return
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !s.app.Config.AuthRequired() {
+		if !csrfOK(r) {
+			writeError(w, http.StatusForbidden, "Запрос отклонён (CSRF)")
+			return
+		}
+		if !s.app.AuthRequiredLocked() {
 			next.ServeHTTP(w, r)
 			return
 		}
-		ok, setCookie := s.authorized(r)
+		ok, setCookie, limited := s.authorized(r)
+		if limited {
+			writeError(w, http.StatusTooManyRequests, "Слишком много попыток входа. Подождите несколько минут.")
+			return
+		}
 		if !ok {
-			w.Header().Set("WWW-Authenticate", `Basic realm="ZatorGO"`)
+			// Не ставим WWW-Authenticate на /api/* — иначе браузер показывает
+			// нативный Basic-диалог поверх SPA и кэширует креды без rate-limit UI.
+			if !isAPIPath(r.URL.Path) {
+				w.Header().Set("WWW-Authenticate", `Basic realm="ZatorGO"`)
+			}
 			writeError(w, http.StatusUnauthorized, "Требуется авторизация")
 			return
 		}
@@ -114,37 +172,57 @@ func (s *Server) clearSessionCookie(w http.ResponseWriter) {
 }
 
 // authorized: session cookie / Bearer session / Basic с паролем.
-func (s *Server) authorized(r *http.Request) (ok, setCookie bool) {
+// limited=true — парольный вход с этого IP временно закрыт и сессии нет.
+// Валидные cookie/Bearer проходят даже во время блокировки IP.
+func (s *Server) authorized(r *http.Request) (ok, setCookie, limited bool) {
+	basicLimited := false
 	if h := r.Header.Get("Authorization"); h != "" {
 		if scheme, rest, found := strings.Cut(h, " "); found {
 			switch strings.ToLower(scheme) {
 			case "bearer":
 				if s.app.SessionEqual(strings.TrimSpace(rest)) {
-					return true, false
+					return true, false, false
 				}
 			case "basic":
-				if _, pass, ok := r.BasicAuth(); ok && s.app.VerifyPassword(pass) {
-					return true, true
+				_, pass, hasBasic := r.BasicAuth()
+				if !hasBasic {
+					break
 				}
+				ip := clientIP(r)
+				if !loginBegin(ip) {
+					basicLimited = true
+					break
+				}
+				if s.app.VerifyPassword(pass) {
+					loginOK(ip)
+					return true, true, false
+				}
+				loginEndFail(ip)
 			}
 		}
 	}
 	if c, err := r.Cookie(CookieName); err == nil && s.app.SessionEqual(c.Value) {
-		return true, false
+		return true, false, false
 	}
-	return false, false
+	if basicLimited {
+		return false, false, true
+	}
+	return false, false, false
 }
 
-// --- login rate limit (in-memory, per-IP) ---
+// --- login rate limit (in-memory, per-IP; только RemoteAddr, без XFF) ---
 
 const (
 	loginMaxFails   = 8
 	loginLockWindow = 5 * time.Minute
+	loginMaxEntries = 1024
 )
 
 type loginAttempt struct {
-	fails    int
+	fails       int
+	pending     int
 	lockedUntil time.Time
+	lastSeen    time.Time
 }
 
 var (
@@ -152,48 +230,106 @@ var (
 	loginAttempts = map[string]*loginAttempt{}
 )
 
+// clientIP берёт только RemoteAddr. X-Forwarded-For намеренно игнорируется:
+// без доверенного прокси клиент подменяет заголовок и обходит лимит.
 func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			return strings.TrimSpace(xff[:i])
-		}
-		return strings.TrimSpace(xff)
-	}
-	host := r.RemoteAddr
-	if i := strings.LastIndex(host, ":"); i >= 0 {
-		return host[:i]
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
 	}
 	return host
 }
 
-func loginAllowed(ip string) bool {
+func resetLoginAttempts() {
 	loginMu.Lock()
 	defer loginMu.Unlock()
-	a := loginAttempts[ip]
-	if a == nil {
-		return true
+	loginAttempts = map[string]*loginAttempt{}
+}
+
+func pruneLoginAttemptsLocked(now time.Time) {
+	for ip, a := range loginAttempts {
+		if a.pending > 0 {
+			continue
+		}
+		if !a.lockedUntil.IsZero() {
+			if now.Before(a.lockedUntil) {
+				continue
+			}
+			delete(loginAttempts, ip)
+			continue
+		}
+		if now.Sub(a.lastSeen) >= loginLockWindow {
+			delete(loginAttempts, ip)
+		}
 	}
-	if time.Now().Before(a.lockedUntil) {
+	for len(loginAttempts) > loginMaxEntries {
+		var drop string
+		var oldest time.Time
+		first := true
+		for ip, a := range loginAttempts {
+			if a.pending > 0 {
+				continue
+			}
+			if first || a.lastSeen.Before(oldest) {
+				drop, oldest, first = ip, a.lastSeen, false
+			}
+		}
+		if drop == "" {
+			break
+		}
+		delete(loginAttempts, drop)
+	}
+}
+
+// loginBegin резервирует слот попытки до bcrypt. false — IP уже заблокирован
+// или исчерпал лимит с учётом параллельных запросов.
+func loginBegin(ip string) bool {
+	loginMu.Lock()
+	defer loginMu.Unlock()
+	now := time.Now()
+	pruneLoginAttemptsLocked(now)
+	a := loginAttempts[ip]
+	if a != nil && !a.lockedUntil.IsZero() && now.Before(a.lockedUntil) {
 		return false
 	}
-	if !a.lockedUntil.IsZero() && time.Now().After(a.lockedUntil) {
+	if a != nil && !a.lockedUntil.IsZero() && !now.Before(a.lockedUntil) {
 		delete(loginAttempts, ip)
+		a = nil
 	}
+	if a == nil {
+		a = &loginAttempt{}
+		loginAttempts[ip] = a
+	}
+	if a.fails+a.pending >= loginMaxFails {
+		a.lockedUntil = now.Add(loginLockWindow)
+		a.fails = 0
+		a.pending = 0
+		a.lastSeen = now
+		return false
+	}
+	a.pending++
+	a.lastSeen = now
 	return true
 }
 
-func loginFail(ip string) {
+func loginEndFail(ip string) {
 	loginMu.Lock()
 	defer loginMu.Unlock()
+	now := time.Now()
 	a := loginAttempts[ip]
 	if a == nil {
 		a = &loginAttempt{}
 		loginAttempts[ip] = a
 	}
+	if a.pending > 0 {
+		a.pending--
+	}
 	a.fails++
+	a.lastSeen = now
 	if a.fails >= loginMaxFails {
-		a.lockedUntil = time.Now().Add(loginLockWindow)
+		a.lockedUntil = now.Add(loginLockWindow)
 		a.fails = 0
+		a.pending = 0
 	}
 }
 
@@ -208,18 +344,18 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, p params) {
 		writeError(w, http.StatusMethodNotAllowed, "Метод не поддерживается")
 		return
 	}
-	if !s.app.Config.AuthRequired() {
+	if !s.app.AuthRequiredLocked() {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "auth_required": false})
 		return
 	}
 	ip := clientIP(r)
-	if !loginAllowed(ip) {
+	if !loginBegin(ip) {
 		writeError(w, http.StatusTooManyRequests, "Слишком много попыток входа. Подождите несколько минут.")
 		return
 	}
 	pass := p.Get("password")
 	if !s.app.VerifyPassword(pass) {
-		loginFail(ip)
+		loginEndFail(ip)
 		writeError(w, http.StatusUnauthorized, "Неверный пароль")
 		return
 	}
@@ -243,12 +379,12 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request, _ params) 
 		return
 	}
 	// Без auth — только сброс cookie в браузере.
-	if !s.app.Config.AuthRequired() {
+	if !s.app.AuthRequiredLocked() {
 		s.clearSessionCookie(w)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "auth_required": false})
 		return
 	}
-	ok, _ := s.authorized(r)
+	ok, _, _ := s.authorized(r)
 	if ok {
 		_ = s.app.RotateSession()
 		_ = s.app.Save()

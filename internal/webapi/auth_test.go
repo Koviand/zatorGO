@@ -1,14 +1,17 @@
 package webapi
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 )
 
 func TestLoginLogoutAndMiddleware(t *testing.T) {
+	resetLoginAttempts()
 	e := newEnv(t, envOpts{})
 	e.app.Config.AuthEnabled = false
 	resp, out := e.get("/api/status")
@@ -103,6 +106,92 @@ func TestLoginLogoutAndMiddleware(t *testing.T) {
 	}
 	if !cleared {
 		t.Fatalf("logout без cookie не очистил Set-Cookie: %v", resp.Header.Values("Set-Cookie"))
+	}
+}
+
+func TestCSRFOriginRejected(t *testing.T) {
+	e := newEnv(t, envOpts{})
+	resp, raw := e.do(http.MethodPost, "/api/login", url.Values{"password": {"x"}}, map[string]string{
+		"Origin": "https://evil.example",
+	})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("csrf: %d %s", resp.StatusCode, raw)
+	}
+	resp, raw = e.do(http.MethodPost, "/api/login", url.Values{"password": {"x"}}, map[string]string{
+		"Origin":         "https://evil.example",
+		"X-Zator-Client": "test",
+	})
+	if resp.StatusCode == http.StatusForbidden {
+		t.Fatalf("header should bypass origin check: %s", raw)
+	}
+}
+
+func TestClientIPIgnoresXForwardedFor(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	r.RemoteAddr = "203.0.113.10:54321"
+	r.Header.Set("X-Forwarded-For", "198.51.100.1")
+	if got := clientIP(r); got != "203.0.113.10" {
+		t.Fatalf("clientIP=%q want RemoteAddr host", got)
+	}
+}
+
+func TestLoginRateLimitAndBasic(t *testing.T) {
+	resetLoginAttempts()
+	e := newEnv(t, envOpts{})
+	if err := e.app.SetPassword("s3cret12"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.app.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < loginMaxFails; i++ {
+		resp, out := e.post("/api/login", "password", "wrong")
+		wantError(t, resp, out, http.StatusUnauthorized, "Неверный пароль")
+	}
+	const lockedMsg = "Слишком много попыток входа. Подождите несколько минут."
+	resp, out := e.post("/api/login", "password", "wrong")
+	wantError(t, resp, out, http.StatusTooManyRequests, lockedMsg)
+
+	// Подмена XFF не должна открыть новый лимит.
+	resp, raw := e.do(http.MethodPost, "/api/login", url.Values{"password": {"wrong"}}, map[string]string{
+		"X-Forwarded-For": "198.51.100.99",
+	})
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("xff bypass: %d %s", resp.StatusCode, raw)
+	}
+
+	resetLoginAttempts()
+	badBasic := "Basic " + base64.StdEncoding.EncodeToString([]byte("x:wrong-pass"))
+	for i := 0; i < loginMaxFails; i++ {
+		resp, out = doJSONAuth(e, http.MethodGet, "/api/status", nil, map[string]string{
+			"Authorization": badBasic,
+		})
+		wantError(t, resp, out, http.StatusUnauthorized, "Требуется авторизация")
+		if resp.Header.Get("WWW-Authenticate") != "" {
+			t.Fatalf("api 401 не должен слать WWW-Authenticate: %q", resp.Header.Get("WWW-Authenticate"))
+		}
+	}
+	resp, out = doJSONAuth(e, http.MethodGet, "/api/status", nil, map[string]string{
+		"Authorization": badBasic,
+	})
+	wantError(t, resp, out, http.StatusTooManyRequests, lockedMsg)
+
+	// Валидная сессия проходит даже при blocked IP.
+	if err := e.app.RotateSession(); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.app.Save(); err != nil {
+		t.Fatal(err)
+	}
+	tok := e.app.Config.SessionToken
+	resp, out = doJSONAuth(e, http.MethodGet, "/api/status", nil, map[string]string{
+		"Cookie":        CookieName + "=" + tok,
+		"Authorization": badBasic,
+	})
+	wantStatus(t, resp, http.StatusOK)
+	if out["profiles"] == nil {
+		t.Fatalf("session during lock: %v", out)
 	}
 }
 

@@ -56,16 +56,23 @@ func buildArchive(t *testing.T, top string, extra ...fakeFile) []byte {
 
 func newServer(t *testing.T, version string, archive []byte, embedded bool, hits *int32) *httptest.Server {
 	t.Helper()
-	want := "/v" + version + "/" + AssetName(version, embedded)
+	asset := AssetName(version, embedded)
+	want := "/v" + version + "/" + asset
+	sumsPath := "/v" + version + "/sha256sum.txt"
+	sum := sha256.Sum256(archive)
+	sumsBody := hex.EncodeToString(sum[:]) + "  " + asset + "\n"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if hits != nil {
 			atomic.AddInt32(hits, 1)
 		}
-		if r.URL.Path != want {
+		switch r.URL.Path {
+		case want:
+			w.Write(archive)
+		case sumsPath:
+			w.Write([]byte(sumsBody))
+		default:
 			http.NotFound(w, r)
-			return
 		}
-		w.Write(archive)
 	}))
 	t.Cleanup(srv.Close)
 	return srv
@@ -259,14 +266,17 @@ func TestInstallFromLocalArchive(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(archPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(archPath, buildArchive(t, "zapret2-v"+ver), 0o644); err != nil {
+	root := filepath.Join(dir, "opt", "zapret2")
+	raw := buildArchive(t, "zapret2-v"+ver)
+	sum := sha256.Sum256(raw)
+	if err := os.WriteFile(archPath, raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	root := filepath.Join(dir, "opt", "zapret2")
 	res, err := DownloadAndInstall(context.Background(), Options{
 		Root: root, Arch: platform.ArchX86_64, Version: ver,
 		VendorDir: filepath.Join(dir, "vendor"),
 		Offline:   true,
+		SHA256:    hex.EncodeToString(sum[:]),
 		Client:    fastClient(),
 	})
 	if err != nil {
@@ -281,7 +291,7 @@ func TestInstallFromLocalArchive(t *testing.T) {
 	// Offline без локального архива — ошибка, без сети.
 	if _, err := DownloadAndInstall(context.Background(), Options{
 		Root: filepath.Join(t.TempDir(), "z"), Arch: platform.ArchX86_64, Version: ver,
-		Offline: true, Client: fastClient(),
+		Offline: true, AllowInsecure: true, Client: fastClient(),
 	}); err == nil || !strings.Contains(err.Error(), "офлайн") {
 		t.Fatalf("offline without archive: %v", err)
 	}

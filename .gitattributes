@@ -1,0 +1,10 @@
+# Списки и скрипты должны оставаться LF: ParseList/shebang и go:embed
+# ломаются на CRLF при сборке с Windows (core.autocrlf).
+assets/lists/** text eol=lf
+assets/extra_strats/** text eol=lf
+assets/init/** text eol=lf
+assets/lua/** text eol=lf
+assets/orchestra/** text eol=lf
+scripts/** text eol=lf
+*.sh text eol=lf
+*.tmpl text eol=lf

@@ -5,6 +5,13 @@ on:
     branches: [main, master, "feat/**"]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -17,13 +24,20 @@ jobs:
         run: go test ./...
       - name: Vet
         run: go vet ./...
-      - name: Build sample arches
+      - name: Build all release architectures
         run: |
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/zator-amd64 ./cmd/zator
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/zator-arm64 ./cmd/zator
-          CGO_ENABLED=0 GOOS=linux GOARCH=mipsle GOMIPS=softfloat go build -o /tmp/zator-mipsel ./cmd/zator
-          CGO_ENABLED=0 GOOS=linux GOARCH=riscv64 go build -o /tmp/zator-riscv64 ./cmd/zator
+          set -euo pipefail
+          # Тот же набор, что scripts/crossbuild.sh / release.yml
           CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -o /tmp/zator-arm ./cmd/zator
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/zator-arm64 ./cmd/zator
+          CGO_ENABLED=0 GOOS=linux GOARCH=mips GOMIPS=softfloat go build -o /tmp/zator-mips ./cmd/zator
+          CGO_ENABLED=0 GOOS=linux GOARCH=mips64 GOMIPS64=softfloat go build -o /tmp/zator-mips64 ./cmd/zator
+          CGO_ENABLED=0 GOOS=linux GOARCH=mipsle GOMIPS=softfloat go build -o /tmp/zator-mipsel ./cmd/zator
+          CGO_ENABLED=0 GOOS=linux GOARCH=mips64le GOMIPS64=softfloat go build -o /tmp/zator-mipsel64 ./cmd/zator
+          CGO_ENABLED=0 GOOS=linux GOARCH=ppc64 go build -o /tmp/zator-ppc ./cmd/zator
+          CGO_ENABLED=0 GOOS=linux GOARCH=386 go build -o /tmp/zator-x86 ./cmd/zator
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/zator-x86_64 ./cmd/zator
+          CGO_ENABLED=0 GOOS=linux GOARCH=riscv64 go build -o /tmp/zator-riscv64 ./cmd/zator
 
   webui:
     runs-on: ubuntu-latest
@@ -44,4 +58,10 @@ jobs:
         working-directory: webui-src
         run: npm run build
       - name: Embedded assets match build
-        run: git diff --exit-code -- assets/webui
+        run: |
+          if [ -n "$(git status --porcelain -- assets/webui)" ]; then
+            echo "assets/webui не совпадает со сборкой:"
+            git status --porcelain -- assets/webui
+            git diff -- assets/webui | head -n 200
+            exit 1
+          fi
