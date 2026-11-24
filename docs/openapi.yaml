@@ -1,0 +1,384 @@
+openapi: 3.0.3
+info:
+  title: ZatorGO HTTP API
+  version: "0.1"
+  description: |
+    Ручная схема ключевых payload'ов (RM0d). Канонические пути `/api/*`;
+    алиасы `/cgi-bin/<name>.cgi`. Полное описание — docs/API.md.
+servers:
+  - url: http://127.0.0.1:17682
+    description: Web UI по умолчанию
+tags:
+  - name: core
+  - name: wave0
+paths:
+  /api/login:
+    post:
+      tags: [core]
+      summary: Вход (ротация session)
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string }
+      responses:
+        "200":
+          description: OK + Set-Cookie zator_session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+  /api/capabilities:
+    get:
+      tags: [wave0]
+      summary: Версия и флаги фич
+      responses:
+        "200":
+          description: Capabilities
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Capabilities"
+  /api/state:
+    get:
+      tags: [core]
+      summary: Агрегат для UI
+      parameters:
+        - name: scope
+          in: query
+          schema: { type: string, default: default }
+        - name: include
+          in: query
+          description: "capabilities,journal,health — через запятую"
+          schema: { type: string }
+      responses:
+        "200":
+          description: State
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/State"
+  /api/status:
+    get:
+      tags: [core]
+      summary: Статус / профили / локи
+      parameters:
+        - name: scope
+          in: query
+          schema: { type: string, default: default }
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+  /api/events:
+    get:
+      tags: [wave0]
+      summary: Long-poll событий
+      parameters:
+        - name: after
+          in: query
+          schema: { type: integer, format: int64, default: 0 }
+        - name: timeout
+          in: query
+          description: Секунды ожидания (0=сразу, default 25, max 55)
+          schema: { type: integer, default: 25 }
+        - name: type
+          in: query
+          schema: { type: string, example: supersweep }
+      responses:
+        "200":
+          description: События
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Events"
+  /api/repair:
+    post:
+      tags: [wave0]
+      summary: Узкий ремонт профиля
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [profile]
+              properties:
+                profile: { type: integer, minimum: 1, maximum: 10 }
+                mode:
+                  type: string
+                  enum: [auto, relock, recommendations, sweep]
+                  default: auto
+                scope: { type: string, default: default }
+                top_k: { type: integer, default: 1 }
+      responses:
+        "200":
+          description: Started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Repair"
+        "400":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+  /api/check:
+    get:
+      tags: [core]
+      summary: Сетевая проверка (одиночная или batch)
+      parameters:
+        - name: profile
+          in: query
+          schema: { type: integer }
+        - name: profiles
+          in: query
+          description: "Batch: 1,2,4 → {ok,checks:[]}"
+          schema: { type: string, example: "1,2" }
+        - name: scope
+          in: query
+          schema: { type: string, default: default }
+      responses:
+        "200":
+          description: Check или BatchCheck
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/Check"
+                  - $ref: "#/components/schemas/BatchCheck"
+  /api/set-lock:
+    post:
+      tags: [core]
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [profile, strategy]
+              properties:
+                profile: { type: string }
+                strategy: { type: integer }
+                scope: { type: string, default: default }
+      responses:
+        "200":
+          description: Lock result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LockResult"
+  /api/settings:
+    get:
+      tags: [core]
+      summary: Чтение setting
+      parameters:
+        - name: setting
+          in: query
+          required: true
+          schema:
+            type: string
+            enum:
+              - supersweep
+              - bypass_flags
+              - strategy_journal
+              - recommendations
+              - update_check
+              - auto_relock
+      responses:
+        "200":
+          description: Payload зависит от setting
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/Supersweep"
+                  - type: object
+    post:
+      tags: [core]
+      summary: Запись setting
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [setting]
+              properties:
+                setting: { type: string }
+                value: { type: string }
+      responses:
+        "200":
+          description: Apply
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Apply"
+        "400":
+          $ref: "#/components/responses/Error"
+
+components:
+  responses:
+    Error:
+      description: Envelope ошибки
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    Ok:
+      type: object
+      properties:
+        ok: { type: boolean, example: true }
+    Error:
+      type: object
+      required: [ok, error, code]
+      properties:
+        ok: { type: boolean, enum: [false] }
+        error: { type: string }
+        code:
+          type: string
+          enum:
+            - unauthorized
+            - csrf
+            - conflict
+            - busy
+            - validation
+            - not_found
+            - rate_limit
+            - unavailable
+            - timeout
+            - internal
+            - method_not_allowed
+            - forbidden
+        detail: { type: string }
+    Capabilities:
+      type: object
+      properties:
+        ok: { type: boolean }
+        version: { type: string }
+        goos: { type: string }
+        goarch: { type: string }
+        auth_required: { type: boolean }
+        features:
+          type: object
+          additionalProperties: true
+        endpoints:
+          type: array
+          items: { type: string }
+    Status:
+      type: object
+      properties:
+        zapret2_running: { type: boolean }
+        profiles:
+          type: array
+          items:
+            type: object
+            properties:
+              profile: {}
+              label: { type: string }
+              current_lock: { type: string }
+              lock_source: { type: string }
+              lock_origin: { type: string }
+              max_strategy: { type: integer }
+        health:
+          type: object
+          additionalProperties: true
+    State:
+      type: object
+      properties:
+        auth_required: { type: boolean }
+        status: { $ref: "#/components/schemas/Status" }
+        version: { type: object, additionalProperties: true }
+        capabilities: { $ref: "#/components/schemas/Capabilities" }
+        journal: { type: object, additionalProperties: true }
+      additionalProperties: true
+    Events:
+      type: object
+      properties:
+        ok: { type: boolean }
+        mode: { type: string, example: long-poll }
+        after: { type: integer, format: int64 }
+        seq: { type: integer, format: int64 }
+        events:
+          type: array
+          items:
+            type: object
+            properties:
+              type: { type: string }
+              state: { type: string }
+              profile: { type: integer }
+              message: { type: string }
+              ts: { type: integer, format: int64 }
+    Repair:
+      type: object
+      properties:
+        ok: { type: boolean }
+        started: { type: boolean }
+        mode: { type: string }
+        previous_lock: { type: string }
+        scope: { type: string }
+        profile: { type: integer }
+        async: { type: boolean }
+    Check:
+      type: object
+      properties:
+        results:
+          type: array
+          items: { type: object, additionalProperties: true }
+        profile: { type: integer }
+        scope: { type: string }
+        lock: { type: string }
+        zapret2_running: { type: boolean }
+    BatchCheck:
+      type: object
+      properties:
+        ok: { type: boolean }
+        checks:
+          type: array
+          items: { $ref: "#/components/schemas/Check" }
+    LockResult:
+      type: object
+      properties:
+        ok: { type: boolean }
+        previous: { type: string }
+        lock: { type: string }
+        changed: { type: boolean }
+        scope: { type: string }
+        profile: { type: integer }
+    Apply:
+      type: object
+      properties:
+        ok: { type: boolean }
+        restarted: { type: boolean }
+        restart_required: { type: boolean }
+        warning: { type: string }
+      additionalProperties: true
+    Supersweep:
+      type: object
+      properties:
+        available: { type: boolean }
+        state:
+          type: string
+          enum: [idle, starting, running, applying, done, cancelled, interrupted]
+        active: { type: boolean }
+        source: { type: string, enum: [none, live, saved] }
+        started: { type: integer }
+        updated: { type: integer }
+        completed: { type: integer }
+        total: { type: integer }
+        scope: { type: string }
+        phase: { type: string }
+        workers: { type: array, items: { type: object, additionalProperties: true } }
+        applied: { type: array, items: { type: object, additionalProperties: true } }
+        domains: { type: array, items: { type: object, additionalProperties: true } }

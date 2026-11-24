@@ -93,7 +93,7 @@ make test
 
 **Стратегии** — строки `--lua-desync=…:strategy=N` в `NFQWS2_OPT`. Лок пишет номер в `locked.tsv`; после фиксации UI показывает TLS 1.2 / 1.3.
 
-HTTP API: [`docs/API.md`](docs/API.md) (`/api/*`; `/cgi-bin/*.cgi` — совместимый алиас).
+HTTP API: [`docs/API.md`](docs/API.md) (`/api/*`; `/cgi-bin/*.cgi` — совместимый алиас). Схема: [`docs/openapi.yaml`](docs/openapi.yaml); curl: [`scripts/api-examples.sh`](scripts/api-examples.sh).
 
 ---
 
@@ -137,7 +137,7 @@ go build -o bin/zator ./cmd/zator
 cd webui-src && npm ci && npm run build   # → assets/webui/
 ```
 
-После правок в `webui-src` обязателен `npm run build` — иначе в релиз уйдёт старая статика. Паритет с bash-zator: [`docs/PARITY.md`](docs/PARITY.md).
+После правок в `webui-src` обязателен `npm run build` — иначе в релиз уйдёт старая статика. На Windows возможен host drift CRLF/бандла: перед push сверяйте с Linux-сборкой или артефактом `webui-assets` из CI (см. Roadmap RM3). Паритет с bash-zator: [`docs/PARITY.md`](docs/PARITY.md). Актуальный backlog: [`Roadmap.md`](Roadmap.md).
 
 Структура: `cmd/zator`, `internal/{app,webapi,deploy,domains,orchestra,…}`, `webui-src` → `assets/webui`, `docs/`.
 
