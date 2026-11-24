@@ -2,6 +2,7 @@ package webapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -25,7 +26,19 @@ func (s *Server) postStrategiesFeed(r *http.Request, p params) (map[string]any, 
 	defer cancel()
 	res, err := u.ApplyStrategiesFeed(ctx)
 	if err != nil {
-		return nil, errf(http.StatusBadGateway, "Каталог стратегий: "+err.Error())
+		msg := "Каталог стратегий: " + err.Error()
+		switch {
+		case errors.Is(err, deploy.ErrBadSignature):
+			return nil, errCode(http.StatusForbidden, CodeForbidden, msg)
+		case errors.Is(err, deploy.ErrOffline):
+			return nil, errCode(http.StatusServiceUnavailable, CodeUnavailable, msg)
+		case strings.Contains(err.Error(), "нет "+deploy.StrategiesFeedName) ||
+			strings.Contains(err.Error(), "нет "+deploy.StrategiesFeedSigName) ||
+			strings.Contains(err.Error(), "нет strategies-extra"):
+			return nil, errCode(http.StatusNotFound, CodeNotFound, msg)
+		default:
+			return nil, errCode(http.StatusBadGateway, CodeUnavailable, msg)
+		}
 	}
 
 	var applied config.StrategiesFeedApply

@@ -1,0 +1,6 @@
+# Fixture: upstream-style sha256sum.txt without archive (.tar.gz) line (RM11).
+# Paths mirror bol-van / MarkinAlexander layout: only binaries/<arch>/nfqws2.
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  zapret2-v1.0.7-reasm-fix/binaries/linux-x86_64/nfqws2
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  zapret2-v1.0.7-reasm-fix/binaries/linux-arm64/nfqws2
+cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  zapret2-v1.0.7-reasm-fix/binaries/linux-mips/nfqws2
+dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd  zapret2-v1.0.7-reasm-fix/binaries/linux-mipsel/nfqws2

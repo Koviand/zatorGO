@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import type { ProfileInfo } from '../api/types'
-import { fetchEvents, fetchStrategyJournal, repairProfile, runCheck, serviceAction } from '../api/endpoints'
+import { fetchEvents, fetchStrategyJournal, profileCheck, repairProfile, runCheck, serviceAction } from '../api/endpoints'
 import CheckResults from '../components/ui/CheckResults.vue'
 import { busyActive, busyButton, withBusy } from '../stores/busy'
 import { confirmDialog } from '../stores/confirm'
@@ -20,6 +20,8 @@ type JournalEntry = { ts?: string; profile?: number; strategy?: number; result?:
 const journalEnabled = ref(false)
 const journalEntries = ref<JournalEntry[]>([])
 const repairNote = ref('')
+const mediaURL = ref('')
+const mediaHint = ref('')
 let mounted = false
 let eventsAbort: AbortController | null = null
 let eventsSeq = 0
@@ -124,6 +126,28 @@ async function check() {
       statusCheckRan.value = true
     })
     showToast('Проверка TLS завершена')
+    mediaHint.value = 'TLS ok ≠ видео ok: для mid-stream вставьте videoplayback URL профиля 2.'
+  } catch (e) {
+    showToast((e as Error).message, 'error')
+  }
+}
+
+async function checkMedia() {
+  const url = mediaURL.value.trim()
+  if (!url) {
+    showToast('Вставьте URL videoplayback из DevTools (Network → googlevideo)', 'warning')
+    return
+  }
+  try {
+    await withBusy('media-check', async () => {
+      statusCheck.value = await profileCheck('2', scope.value || 'default', { mediaUrl: url })
+      statusCheckRan.value = true
+      const cls = (statusCheck.value?.results || []).map((r) => r.media?.class).find(Boolean)
+      mediaHint.value = cls
+        ? `media.class=${cls} (tls|tiny|midstream|play|dns). TLS ok ≠ видео ok.`
+        : 'Проверка Range 16K/64K выполнена. Смотрите download/verdict в результатах.'
+    })
+    showToast('Mid-stream проверка профиля 2 завершена')
   } catch (e) {
     showToast((e as Error).message, 'error')
   }
@@ -325,6 +349,14 @@ onUnmounted(() => {
           </div>
         </div>
 
+        <div class="security-hint warn-list" style="margin-top:0.75rem">
+          <strong>Безопасность Web UI</strong>
+          <div>
+            UI слушает все интерфейсы на порту <span class="mono">17682</span>. Ограничьте доступ firewall’ом / reverse proxy.
+            Подробнее: <a href="https://github.com/Koviand/zatorGO/blob/main/.github/SECURITY.md" rel="noopener" target="_blank">SECURITY.md</a>.
+          </div>
+        </div>
+
         <div class="console-cta">
           <button type="button" class="primary" :disabled="busyActive" :class="{ 'is-busy': busyButton === 'status-check' }" @click="check">Проверить</button>
           <button
@@ -343,7 +375,17 @@ onUnmounted(() => {
           <h2>Результаты TLS</h2>
           <span class="chip">scope {{ scope }}</span>
         </div>
-        <p class="panel-d">Проверка доступности эталонных целей через текущую конфигурацию.</p>
+        <p class="panel-d">Проверка доступности эталонных целей. <strong>TLS ok ≠ видео ok</strong> — для YouTube mid-stream нужна Range-проба профиля 2.</p>
+        <div class="media-check" style="display:grid;gap:0.45rem;margin:0.5rem 0 0.75rem">
+          <label class="panel-d" for="media-url">Googlevideo videoplayback URL (профиль 2)</label>
+          <input id="media-url" v-model="mediaURL" type="url" placeholder="https://rr…googlevideo.com/videoplayback?…" autocomplete="off">
+          <div class="actions">
+            <button type="button" :disabled="busyActive" :class="{ 'is-busy': busyButton === 'media-check' }" @click="checkMedia">
+              Mid-stream 16K/64K
+            </button>
+          </div>
+          <p v-if="mediaHint" class="panel-d mono">{{ mediaHint }}</p>
+        </div>
         <CheckResults
           :payload="statusCheck"
           :empty-hidden="false"

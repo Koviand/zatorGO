@@ -41,10 +41,10 @@ const sections = [
 ]
 
 const settingGroups = [
-  { id: 'grp-system', title: 'Система', desc: 'Обновления, провайдер и резервные копии.' },
-  { id: 'grp-bypass', title: 'Обход DPI', desc: 'Режимы стратегий, TLS/WG blob и wssize.' },
+  { id: 'grp-system', title: 'Безопасность и система', desc: 'Обновления, провайдер, бэкапы. Web UI на :17682 — ограничьте доступ (SECURITY.md).' },
+  { id: 'grp-bypass', title: 'Обход', desc: 'Режимы стратегий, TLS/WG blob и wssize.' },
   { id: 'grp-net', title: 'Сеть', desc: 'Firewall, интерфейсы WAN/LAN, порты NFQUEUE и client scopes.' },
-  { id: 'grp-svc', title: 'Сервис', desc: 'Сырой конфиг zapret2 и журнал ошибок.' },
+  { id: 'grp-svc', title: 'Служебное', desc: 'Сырой конфиг zapret2 и журнал ошибок.' },
 ]
 
 const panelAliases: Record<string, string> = {
@@ -124,7 +124,7 @@ watch(settingsLoaded, async (ready) => {
     <div class="page-head">
       <div>
         <h1>Настройки</h1>
-        <p>Система, обход DPI, сеть и сервис — якоря сверху.</p>
+        <p>Безопасность / сеть / обход / служебное — якоря сверху, deep links живы.</p>
       </div>
       <div class="actions">
         <button type="button" :disabled="busyActive" :class="{ 'is-busy': busyButton === 'refresh-settings' }" @click="refresh">Обновить</button>

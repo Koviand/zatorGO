@@ -39,13 +39,28 @@ chmod +x zator-launcher.sh
 
 Лаунчер проверит **Ed25519-подпись** `SHA256SUMS` (нужен OpenSSL 3+), сверит sha256 бинарника, поставит zapret2 и поднимет Web UI на порту **17682**.
 
-Откройте `http://<IP>:17682/` — пароль задаётся при установке. Auth **включён по умолчанию**.
+### Неинтерактивно (без TTY / CI / cloud-init)
+
+Аргументы после launcher уходят в `zator install`:
+
+```sh
+./zator-launcher.sh -password 'ваш-секрет'
+# эквивалент: zator install -password '…'
+```
+
+Без TTY пароль **нельзя** ввести интерактивно — нужен `-password`.  
+**Не** используйте `-no-auth` как «удобный дефолт»: Web UI окажется открыт всей сети. Флаг допустим только осознанно и с предупреждением в логе.
+
+Не ставьте через `curl | sh` без просмотра скрипта; сохраните launcher на диск, как выше.
+
+Откройте `http://<IP>:17682/` — auth **включён по умолчанию**.
 
 | Действие | Команда / место |
 | --- | --- |
 | Обновить | Web UI → Настройки → Обновления, или `zator update` |
 | Переустановить | `zator uninstall -y` → снова launcher (`--purge` сносит и данные) |
-| Сменить пароль | `zator auth set-password` |
+| Сменить пароль | `zator auth set-password -password '…'` |
+| Офлайн-бандл | `scripts/pack-offline.sh` → `ZATOR_BUNDLE_DIR=…` / `Z2R_OFFLINE=1` (см. ниже) |
 
 Подробности цепочки доверия: [SECURITY.md](.github/SECURITY.md).
 
@@ -126,9 +141,20 @@ zator version
 
 ---
 
+## Офлайн (роутер без GitHub)
+
+1. На машине с интернетом: `./scripts/pack-offline.sh` (или подготовьте `vendor/` + `zator-*.tar.gz`).
+2. Скопируйте бандл на устройство.
+3. Установка: `ZATOR_BUNDLE_DIR=/path/to/bundle zator install -password '…'`  
+   либо `Z2R_OFFLINE=1` при наличии `vendor/` рядом с бинарником.
+
+Офлайн **не** расширяет insecure-режим: для zapret по-прежнему нужна контрольная сумма (или явный AllowInsecure только в отладке). Подпись самого бинарника Zator — через подписанный `SHA256SUMS` при online update; offline bundle доверяет заранее скачанному артефакту.
+
+---
+
 ## Разработка
 
-Go **1.22+**, Node.js **20+**.
+Go **1.22+**, Node.js **22+**.
 
 ```sh
 go test ./...

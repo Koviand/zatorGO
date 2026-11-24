@@ -6,8 +6,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/AloofLibra/zator/internal/app"
 )
 
 func TestLoginLogoutAndMiddleware(t *testing.T) {
@@ -232,4 +236,50 @@ func doJSONAuth(e *env, method, path string, form url.Values, hdr map[string]str
 		e.t.Fatalf("%s %s: не JSON: %v\n%s", method, path, err, body)
 	}
 	return resp, out
+}
+
+// RM12: CLI set-password ротирует session_token; старый cookie отвергается после mtime reload.
+func TestSessionRejectedAfterCLISetPassword(t *testing.T) {
+	resetLoginAttempts()
+	e := newEnv(t, envOpts{})
+	if err := e.app.SetPassword("s3cret12"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.app.Save(); err != nil {
+		t.Fatal(err)
+	}
+	oldTok := e.app.Config.SessionToken
+	if oldTok == "" {
+		t.Fatal("empty session")
+	}
+	resp, out := doJSONAuth(e, http.MethodGet, "/api/status", nil, map[string]string{
+		"Cookie": CookieName + "=" + oldTok,
+	})
+	wantStatus(t, resp, http.StatusOK)
+	if out["profiles"] == nil {
+		t.Fatalf("%v", out)
+	}
+
+	cli := app.NewWith(e.app.Paths, e.app.Platform)
+	cli.ConfigPath = e.app.ConfigPath
+	if err := cli.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cli.SetPassword("newpass99"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cli.Save(); err != nil {
+		t.Fatal(err)
+	}
+	newer := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(e.app.ConfigPath, newer, newer); err != nil {
+		t.Fatal(err)
+	}
+	// ReloadAuthIfStale троттлит проверку mtime (~1s).
+	time.Sleep(1100 * time.Millisecond)
+
+	resp, out = doJSONAuth(e, http.MethodGet, "/api/status", nil, map[string]string{
+		"Cookie": CookieName + "=" + oldTok,
+	})
+	wantError(t, resp, out, http.StatusUnauthorized, "Требуется авторизация")
 }

@@ -51,6 +51,27 @@ func TestParseSHA256SumFileUpstreamOnly(t *testing.T) {
 	}
 }
 
+// RM11: fixture реального upstream-формата (без строки *.tar.gz).
+func TestParseSHA256SumFileUpstreamFixture(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("testdata", "sha256sum_upstream.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := ParseSHA256SumFile(body)
+	if idx.ArchiveSum("anything.tar.gz") != "" {
+		t.Fatal("archive sum must stay empty for upstream fixture")
+	}
+	if !idx.HasBinarySums() {
+		t.Fatal("HasBinarySums")
+	}
+	if got := idx.BinarySum("linux-x86_64", BinNfqws2); got != strings.Repeat("a", 64) {
+		t.Fatalf("x86_64=%q", got)
+	}
+	if got := idx.BinarySum("linux-mips", BinNfqws2); got != strings.Repeat("c", 64) {
+		t.Fatalf("mips=%q", got)
+	}
+}
+
 func TestVerifyStagedBinaries(t *testing.T) {
 	dir := t.TempDir()
 	arch := "linux-x86_64"

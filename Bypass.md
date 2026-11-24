@@ -1,4 +1,4 @@
-# План усиления обхода DPI (ZatorGO)
+﻿# План усиления обхода DPI (ZatorGO)
 
 Документ описывает **продуктовые и технические улучшения эффективности обхода**. Инфраструктурный план Improvements закрыт и удалён; актуальный backlog — [`Roadmap.md`](Roadmap.md).
 
@@ -70,11 +70,11 @@
 
 **Критерий готовности:**
 
-- [ ] искусственный fail check → через ≤N циклов стартует подбор только затронутого профиля;
-- [ ] успешный probe → новый lock + TLS ok;
-- [ ] неуспех → предыдущий lock сохранён, есть явное предупреждение;
-- [ ] выключатель в настройках (`auto_relock=0|1`) и в status JSON;
-- [ ] коммит: `feat(bypass): auto-relock degraded profiles after TLS fail`.
+- [x] искусственный fail check → через ≤N циклов стартует подбор только затронутого профиля (unit: `relock` / `bypass_test`);
+- [x] успешный probe → новый lock + TLS ok;
+- [x] неуспех → предыдущий lock сохранён, есть явное предупреждение;
+- [x] выключатель в настройках (`auto_relock=0|1`) и в status JSON;
+- [x] коммит: `8c90559` `feat(bypass): add recovery suite and wave-0 API surface` (полевая smoke — Roadmap RM2).
 
 ---
 
@@ -96,7 +96,7 @@
 - [x] apply без сети рекомендаций → понятная ошибка / unavailable;
 - [x] fail check откатывает lock;
 - [x] ok оставляет lock и пишет `lock_origin=recommendations` (sidecar → status/UI);
-- [ ] коммит: `feat(bypass): apply provider recommendations with TLS verify`.
+- [x] коммит: `8c90559` (в составе recovery suite).
 
 ---
 
@@ -114,10 +114,10 @@
 
 **Критерий готовности:**
 
-- [ ] смена провайдера с включённой опцией ставит в очередь soft-sweep;
-- [ ] schedule off by default;
-- [ ] не запускает второй sweep, если уже `active`;
-- [ ] коммит: `feat(bypass): trigger supersweep on provider change / broken profiles`.
+- [x] смена провайдера с включённой опцией ставит в очередь soft-sweep;
+- [x] schedule off by default;
+- [x] не запускает второй sweep, если уже `active`;
+- [x] коммит: `8c90559` / `85810fc` (Bypass suite + webui).
 
 ---
 
@@ -138,9 +138,9 @@
 
 **Критерий готовности:**
 
-- [ ] статус seed/auto_locks/ipv4/wssize виден в одном месте;
-- [ ] повторный seed не долбит CPU (backoff);
-- [ ] коммит: `feat(bypass): googlevideo quality control loop in Domains UI`.
+- [x] статус seed/auto_locks/ipv4/wssize виден в одном месте;
+- [x] повторный seed не долбит CPU (backoff);
+- [x] коммит: `8c90559` / `85810fc` (Bypass suite + webui).
 
 ---
 
@@ -160,7 +160,7 @@
 
 - [x] один action трогает согласованно TCP и voice;
 - [x] partial / configured / skipped различимы в API/UI;
-- [ ] коммит: `feat(bypass): Discord TCP+UDP repair preset`.
+- [x] коммит: `8c90559` / `85810fc` (Bypass suite + webui).
 
 ---
 
@@ -178,9 +178,9 @@
 
 **Критерий готовности:**
 
-- [ ] оператор видит текущую политику QUIC и к чему она применяется;
-- [ ] переключение не ломает Discord/голос без предупреждения;
-- [ ] коммит: `feat(bypass): clearer QUIC policy in settings/status`.
+- [x] оператор видит текущую политику QUIC и к чему она применяется;
+- [x] переключение не ломает Discord/голос без предупреждения;
+- [x] коммит: `8c90559` / `85810fc` (Bypass suite + webui).
 
 ---
 
@@ -203,7 +203,7 @@
 
 - [x] explain для known/unknown домена стабилен и без смены CRUD-контракта (exclude/RKN/Discord/YT/autohostlist/googlevideo + role);
 - [x] импорт URL не обходит Normalize / autoGuard (+ SSRF deny);
-- [ ] коммит: `feat(bypass): explain which list matches a domain`.
+- [x] коммит: `8c90559` / `85810fc` (Bypass suite + webui).
 
 ---
 
@@ -217,9 +217,9 @@
 
 **Критерий готовности:**
 
-- [ ] пресет включает scope без ручного hex, если платформа позволяет;
-- [ ] копирование локов default→scope опционально и обратимо;
-- [ ] коммит: `feat(bypass): client-scope presets wizard`.
+- [x] пресет включает scope без ручного hex, если платформа позволяет;
+- [x] копирование локов default→scope опционально и обратимо;
+- [x] коммит: `8c90559` / `85810fc` (Bypass suite + webui).
 
 ---
 
@@ -233,9 +233,9 @@
 
 **Критерий готовности:**
 
-- [ ] blob fallback только при включённой опции;
-- [ ] откат override при неуспехе;
-- [ ] коммит: `feat(bypass): try alternate TLS blob/clone on probe fail`.
+- [x] blob fallback только при включённой опции;
+- [x] откат override при неуспехе;
+- [x] коммит: `8c90559` / `85810fc` (Bypass suite + webui).
 
 ---
 
@@ -257,7 +257,7 @@
 
 - [x] PARITY: validator daemon = done (unit + `health.validator` ok|degraded|off, wired to relock/queue FAIL);
 - [x] health отражает validator (`degraded` при relock-профилях или свежих FAIL очереди);
-- [ ] коммит: `feat(bypass): strategy validator daemon wired to health/relock`.
+- [x] коммит: `8c90559` / `85810fc` (Bypass suite + webui).
 
 ---
 
@@ -273,7 +273,7 @@
 
 - [x] выключено по умолчанию; запись на диск только при `journal_enabled` (+ лимит размера при записи);
 - [x] не пишет password/session;
-- [ ] коммит: `feat(bypass): local strategy success journal`.
+- [x] коммит: `8c90559` / `85810fc` (Bypass suite + webui).
 
 ---
 
@@ -296,7 +296,7 @@
 - [x] без валидной подписи каталог не применяется;
 - [x] CLI и Web — единый путь (verify → register с dedupe → restart hint/maybeRestart);
 - [x] после apply новые N видны в UI как стратегии профиля (кнопка «Каталог стратегий»);
-- [ ] коммит(ы): `feat(deploy): signed strategies feed`, `feat(webui): update strategy catalog`.
+- [x] коммит: `8c90559` / `85810fc` (Bypass suite + webui).
 
 ---
 

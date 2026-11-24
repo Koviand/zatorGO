@@ -111,7 +111,7 @@ export const runCheck = () =>
 export const profileCheck = (
   profile: string,
   scope: string,
-  opts: { waitApply?: boolean; expectLock?: string } = {},
+  opts: { waitApply?: boolean; expectLock?: string; mediaUrl?: string } = {},
 ) =>
   api<CheckPayload>('/api/check',
     formBody({
@@ -119,6 +119,7 @@ export const profileCheck = (
       scope,
       wait_apply: opts.waitApply ? '1' : undefined,
       expect_lock: opts.expectLock || undefined,
+      media_url: opts.mediaUrl || undefined,
     }))
 
 /** Batch check: profiles=1,2,4 → {ok, checks:[...]} (RM0c). */
