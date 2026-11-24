@@ -41,7 +41,7 @@ const sections = [
 ]
 
 const settingGroups = [
-  { id: 'grp-system', title: 'Безопасность и система', desc: 'Обновления, провайдер, бэкапы. Web UI на :17682 — ограничьте доступ (SECURITY.md).' },
+  { id: 'grp-system', title: 'Безопасность и система', desc: 'Обновления, провайдер, бэкапы. Web UI :17682 (bind-all с auth; без auth — -host/-listen-all). См. SECURITY.md.' },
   { id: 'grp-bypass', title: 'Обход', desc: 'Режимы стратегий, TLS/WG blob и wssize.' },
   { id: 'grp-net', title: 'Сеть', desc: 'Firewall, интерфейсы WAN/LAN, порты NFQUEUE и client scopes.' },
   { id: 'grp-svc', title: 'Служебное', desc: 'Сырой конфиг zapret2 и журнал ошибок.' },

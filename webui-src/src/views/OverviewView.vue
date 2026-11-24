@@ -352,7 +352,9 @@ onUnmounted(() => {
         <div class="security-hint warn-list" style="margin-top:0.75rem">
           <strong>Безопасность Web UI</strong>
           <div>
-            UI слушает все интерфейсы на порту <span class="mono">17682</span>. Ограничьте доступ firewall’ом / reverse proxy.
+            По умолчанию с паролем UI слушает все интерфейсы на порту <span class="mono">17682</span>.
+            Без auth запуск только с <span class="mono">-host</span> или явным <span class="mono">-listen-all</span>.
+            Ограничьте доступ firewall’ом / reverse proxy.
             Подробнее: <a href="https://github.com/Koviand/zatorGO/blob/main/.github/SECURITY.md" rel="noopener" target="_blank">SECURITY.md</a>.
           </div>
         </div>

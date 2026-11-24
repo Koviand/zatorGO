@@ -1,6 +1,6 @@
 import { reactive, ref } from 'vue'
 import { fetchScopes, fetchStatus } from '../api/endpoints'
-import type { CheckPayload, ProfileInfo, ScopesPayload, StatusPayload, VersionInfo } from '../api/types'
+import type { CapabilitiesPayload, CheckPayload, ProfileInfo, ScopesPayload, StatusPayload, VersionInfo } from '../api/types'
 
 export const status = ref<StatusPayload | null>(null)
 export const versionInfo = ref<VersionInfo | null>(null)
@@ -12,6 +12,8 @@ export const statusLoaded = ref(false)
 export const strategyChecks = reactive<Record<string, CheckPayload>>({})
 export const statusCheck = ref<CheckPayload | null>(null)
 export const statusCheckRan = ref(false)
+/** RM0a: кэш /api/capabilities (через state?include=) для gating UI. */
+export const capabilities = ref<CapabilitiesPayload | null>(null)
 
 export async function refreshAll() {
   const payload = await fetchStatus(scope.value)

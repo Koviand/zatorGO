@@ -4,7 +4,7 @@ import {
   fallbackSettings, ifacesSettings, modeSettings, ports, provider, settingsLoaded, wssizeRampSettings,
   tlsBlobSettings, udpGamesSettings, wgBlobSettings, wgStateSettings,
 } from './settings'
-import { authRequired, locks, scope, scopes, status, statusLoaded, versionInfo } from './status'
+import { authRequired, capabilities, locks, scope, scopes, status, statusLoaded, versionInfo } from './status'
 import { showToast } from './toast'
 
 function sectionError(value: unknown): string | null {
@@ -25,11 +25,12 @@ function takeSection<T>(value: T | undefined, label: string, errors: string[]): 
 // Одна агрегирующая загрузка вместо ~15 отдельных CGI: state.cgi читает
 // всё состояние за один процесс на роутере.
 export async function fetchAndApplyState() {
-  const payload = await fetchState(scope.value)
+  const payload = await fetchState(scope.value, ['capabilities', 'health'])
   const partial: string[] = []
   authRequired.value = payload.auth_required !== false
   status.value = payload.status
   versionInfo.value = payload.version
+  if (payload.capabilities) capabilities.value = payload.capabilities
   locks.value = payload.status?.profiles || []
   scopes.value = payload.scopes
   tlsBlobSettings.value = takeSection(payload.tls_blob, 'TLS', partial) as typeof tlsBlobSettings.value
