@@ -28,7 +28,9 @@
 ## Рекомендации по развёртыванию
 
 - Держите **auth включённым** на устройствах, доступных из сети.
-- Не используйте `zator install -no-auth` на публичных VPS.
+- Не используйте `zator install -no-auth` / `zator webui -listen-all` на публичных VPS.
+- Без auth Web UI требует явный `-host` или `-listen-all` (отказ при пустом bind).
+- Офлайн-бандл: `SHA256SUMS` + `SHA256SUMS.sig` обязательны перед ApplyBundle.
 - Ограничивайте порт `17682` firewall’ом / reverse proxy при необходимости.
 - Проверяйте, что `ZATOR_OWNER` / `ZATOR_REPO` указывают на доверенный репозиторий обновлений.
 

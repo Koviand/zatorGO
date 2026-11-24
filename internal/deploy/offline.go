@@ -1,6 +1,10 @@
 package deploy
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -94,12 +98,60 @@ func DetectOffline(getenv func(string) string, bundleDir string) OfflineStatus {
 
 // ApplyBundle применяет архив офлайн-бандла без обращения к сети. Версия
 // записывается с TRACKING = "offline-<tag>" (tag пуст — "offline").
+// Если в каталоге бандла есть SHA256SUMS и SHA256SUMS.sig — обязательна
+// проверка Ed25519 и sha256 архива (fail-closed при битой/частичной подписи).
 func (u *Updater) ApplyBundle(b Bundle, tag string) (*ApplyResult, error) {
+	if err := VerifyOfflineBundleSignature(b); err != nil {
+		return nil, err
+	}
 	tracking := "offline"
 	if tag = strings.TrimSpace(tag); tag != "" {
 		tracking = "offline-" + tag
 	}
 	return u.ApplyArchive(b.Tarball, ApplyOptions{Tracking: tracking})
+}
+
+// VerifyOfflineBundleSignature проверяет Ed25519 SHA256SUMS[.sig] рядом с tar.
+// Нет обоих файлов — ошибка (не расширяем AllowInsecure). Один без другого — ошибка.
+func VerifyOfflineBundleSignature(b Bundle) error {
+	sumsPath := filepath.Join(b.Dir, SHA256SUMSName)
+	sigPath := filepath.Join(b.Dir, SHA256SUMSSigName)
+	sums, errSums := os.ReadFile(sumsPath)
+	sig, errSig := os.ReadFile(sigPath)
+	hasSums := errSums == nil
+	hasSig := errSig == nil
+	switch {
+	case !hasSums && !hasSig:
+		return fmt.Errorf("deploy: офлайн-бандл без %s/%s — отказоустойчивый режим не расширяется; пересоберите pack-offline с подписью", SHA256SUMSName, SHA256SUMSSigName)
+	case hasSums != hasSig:
+		return fmt.Errorf("deploy: офлайн-бандл: нужны оба файла %s и %s", SHA256SUMSName, SHA256SUMSSigName)
+	}
+	pub, err := ReleasePublicKey()
+	if err != nil {
+		return err
+	}
+	if err := VerifySHA256SUMS(pub, sums, sig); err != nil {
+		return fmt.Errorf("deploy: офлайн SHA256SUMS.sig: %w", err)
+	}
+	wantName := filepath.Base(b.Tarball)
+	want := parseSHA256SUMS(sums, wantName)
+	if want == "" {
+		return fmt.Errorf("deploy: в SHA256SUMS нет суммы для %s", wantName)
+	}
+	f, err := os.Open(b.Tarball)
+	if err != nil {
+		return fmt.Errorf("deploy: офлайн tar: %w", err)
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return fmt.Errorf("deploy: офлайн tar hash: %w", err)
+	}
+	got := hex.EncodeToString(h.Sum(nil))
+	if !strings.EqualFold(got, want) {
+		return fmt.Errorf("deploy: sha256 офлайн-архива не совпал (ожидалось %s, получено %s)", want, got)
+	}
+	return nil
 }
 
 // ResolveOfflineBundle ищет офлайн-бандл.

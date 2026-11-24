@@ -156,7 +156,7 @@ func (s *Server) customRKNStaleHint() string {
 }
 
 func (s *Server) fetchDomainListURL(ctx context.Context, rawURL string) (string, error) {
-	u, err := validatePublicHTTPURL(rawURL)
+	u, pins, err := validatePublicHTTPURL(rawURL)
 	if err != nil {
 		return "", err
 	}
@@ -165,7 +165,7 @@ func (s *Server) fetchDomainListURL(ctx context.Context, rawURL string) (string,
 		return "", err
 	}
 	req.Header.Set("User-Agent", "zator-domain-import/1")
-	client := domainImportHTTPClient()
+	client := domainImportHTTPClient(pins)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err

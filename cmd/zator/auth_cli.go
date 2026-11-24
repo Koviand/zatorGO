@@ -17,6 +17,8 @@ const authUsage = `zator auth — управление доступом к Web U
   zator auth set-password [-password PAROL]
   zator auth enable [-password PAROL]
   zator auth disable -y
+
+Пароль: -password (виден в ps) или переменная ZATOR_PASSWORD.
 `
 
 func cmdAuth(args []string, stdout, stderr io.Writer) int {
@@ -160,6 +162,7 @@ func cmdAuthDisable(args []string, stdout, stderr io.Writer) int {
 
 func resolvePasswordFlag(args []string, stderr io.Writer) (string, error) {
 	pass := ""
+	fromFlag := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -170,16 +173,25 @@ func resolvePasswordFlag(args []string, stderr io.Writer) (string, error) {
 			}
 			i++
 			pass = args[i]
+			fromFlag = true
 		case strings.HasPrefix(a, "-password="):
 			pass = strings.TrimPrefix(a, "-password=")
+			fromFlag = true
 		case strings.HasPrefix(a, "--password="):
 			pass = strings.TrimPrefix(a, "--password=")
+			fromFlag = true
 		case a == "-h" || a == "--help":
 			return "", fmt.Errorf("help")
 		default:
 			fmt.Fprintf(stderr, "неизвестный аргумент %q\n", a)
 			return "", fmt.Errorf("bad arg")
 		}
+	}
+	if pass == "" {
+		pass = strings.TrimSpace(os.Getenv("ZATOR_PASSWORD"))
+	}
+	if fromFlag && pass != "" {
+		fmt.Fprintln(stderr, "предупреждение: -password виден в списке процессов (ps); предпочтительнее ZATOR_PASSWORD")
 	}
 	return pass, nil
 }

@@ -88,7 +88,10 @@ func TestInstallInvalidSource(t *testing.T) {
 
 func TestInstallNoAuth(t *testing.T) {
 	setupEnv(t)
-	if code, _, errOut := runCmd(t, "install", "-zapret=false", "-skip-service", "-no-auth"); code != 0 {
+	if code, _, errOut := runCmd(t, "install", "-zapret=false", "-skip-service", "-no-auth"); code != 2 {
+		t.Fatalf("no-auth без -listen-all/-host: code=%d %s", code, errOut)
+	}
+	if code, _, errOut := runCmd(t, "install", "-zapret=false", "-skip-service", "-no-auth", "-listen-all"); code != 0 {
 		t.Fatalf("install: %d %s", code, errOut)
 	}
 	if code, out, _ := runCmd(t, "auth", "status"); code != 0 || !strings.Contains(out, "auth_enabled:  false") {
@@ -96,9 +99,20 @@ func TestInstallNoAuth(t *testing.T) {
 	}
 }
 
+func TestServeNoAuthRequiresHostOrListenAll(t *testing.T) {
+	setupEnv(t)
+	if code, _, errOut := runCmd(t, "install", "-zapret=false", "-skip-service", "-no-auth", "-listen-all"); code != 0 {
+		t.Fatalf("install: %d %s", code, errOut)
+	}
+	code, _, errOut := runCmd(t, "webui")
+	if code != 2 || !strings.Contains(errOut, "auth отключён") {
+		t.Fatalf("webui без -host/-listen-all: code=%d err=%q", code, errOut)
+	}
+}
+
 func TestWebHandlerServesAPIAndStatic(t *testing.T) {
 	setupEnv(t)
-	if code, _, errOut := runCmd(t, "install", "-port", "18081", "-zapret=false", "-skip-service", "-no-auth"); code != 0 {
+	if code, _, errOut := runCmd(t, "install", "-port", "18081", "-zapret=false", "-skip-service", "-no-auth", "-listen-all"); code != 0 {
 		t.Fatalf("install: %d %s", code, errOut)
 	}
 	a, err := app.Load()

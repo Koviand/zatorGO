@@ -283,3 +283,65 @@ func TestSessionRejectedAfterCLISetPassword(t *testing.T) {
 	})
 	wantError(t, resp, out, http.StatusUnauthorized, "Требуется авторизация")
 }
+
+func TestSessionCookieSecureOnHTTPSHints(t *testing.T) {
+	e := newEnv(t, envOpts{})
+	if err := e.app.SetPassword("s3cret12"); err != nil {
+		t.Fatal(err)
+	}
+	_ = e.app.Save()
+	form := url.Values{"password": {"s3cret12"}}
+	resp, _ := e.do(http.MethodPost, "/api/login", form, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("login http: %d", resp.StatusCode)
+	}
+	found := false
+	for _, c := range resp.Cookies() {
+		if c.Name != CookieName {
+			continue
+		}
+		found = true
+		if c.Secure {
+			t.Fatal("HTTP login не должен ставить Secure")
+		}
+		if c.MaxAge != sessionCookieMaxAge {
+			t.Fatalf("MaxAge=%d want %d", c.MaxAge, sessionCookieMaxAge)
+		}
+	}
+	if !found {
+		t.Fatalf("нет session cookie: %v", resp.Header.Values("Set-Cookie"))
+	}
+	if got := sessionCookieMaxAge; got != 7*24*3600 {
+		t.Fatalf("MaxAge const=%d", got)
+	}
+
+	resp, _ = e.do(http.MethodPost, "/api/login", form, map[string]string{
+		"X-Forwarded-Proto": "https",
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("login xfp: %d", resp.StatusCode)
+	}
+	secure := false
+	for _, h := range resp.Header.Values("Set-Cookie") {
+		if strings.Contains(h, CookieName+"=") && strings.Contains(strings.ToLower(h), "secure") {
+			secure = true
+		}
+	}
+	if !secure {
+		t.Fatalf("X-Forwarded-Proto=https должен дать Secure: %v", resp.Header.Values("Set-Cookie"))
+	}
+}
+
+func TestRequestLooksHTTPS(t *testing.T) {
+	if requestLooksHTTPS(nil) {
+		t.Fatal("nil")
+	}
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	if requestLooksHTTPS(r) {
+		t.Fatal("plain http")
+	}
+	r.Header.Set("X-Forwarded-Proto", "https")
+	if !requestLooksHTTPS(r) {
+		t.Fatal("xfp")
+	}
+}

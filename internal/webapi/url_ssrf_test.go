@@ -2,9 +2,11 @@ package webapi
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 )
 
@@ -51,19 +53,59 @@ func TestValidatePublicHTTPURLRejects(t *testing.T) {
 		"http://foo.localhost/x",
 	}
 	for _, raw := range bads {
-		if _, err := validatePublicHTTPURL(raw); err == nil {
+		if _, _, err := validatePublicHTTPURL(raw); err == nil {
 			t.Errorf("expected reject: %s", raw)
 		}
 	}
 }
 
 func TestValidatePublicHTTPURLAcceptsPublicIPLiteral(t *testing.T) {
-	u, err := validatePublicHTTPURL("https://1.1.1.1/path")
+	u, pins, err := validatePublicHTTPURL("https://1.1.1.1/path")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if u.Hostname() != "1.1.1.1" {
 		t.Fatalf("%v", u)
+	}
+	if len(pins) != 1 || pins[0].String() != "1.1.1.1" {
+		t.Fatalf("pins=%v", pins)
+	}
+}
+
+func TestSSRFPinNoRebindingLookup(t *testing.T) {
+	var lookups atomic.Int32
+	old := lookupIPFn
+	lookupIPFn = func(host string) ([]net.IP, error) {
+		lookups.Add(1)
+		n := lookups.Load()
+		if n == 1 {
+			return []net.IP{net.ParseIP("8.8.8.8")}, nil
+		}
+		// «Rebinding»: второй resolve отдаёт loopback — Dial не должен сюда ходить.
+		return []net.IP{net.ParseIP("127.0.0.1")}, nil
+	}
+	t.Cleanup(func() { lookupIPFn = old })
+
+	_, pins, err := validatePublicHTTPURL("http://evil.example/list.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pins) != 1 || pins[0].String() != "8.8.8.8" {
+		t.Fatalf("pins=%v", pins)
+	}
+
+	var dialed string
+	client := domainImportHTTPClientDial(pins, func(_ context.Context, _, addr string) (net.Conn, error) {
+		dialed = addr
+		return nil, errors.New("stop")
+	})
+	req, _ := http.NewRequest(http.MethodGet, "http://evil.example/list.txt", nil)
+	_, _ = client.Do(req)
+	if dialed != "8.8.8.8:80" {
+		t.Fatalf("dialed=%q want 8.8.8.8:80 (no rebinding)", dialed)
+	}
+	if lookups.Load() != 1 {
+		t.Fatalf("Dial must not re-lookup; lookups=%d", lookups.Load())
 	}
 }
 

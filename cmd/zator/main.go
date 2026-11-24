@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -117,14 +118,27 @@ func cmdInstall(args []string, stdout, stderr io.Writer) int {
 	withZapret := fs.Bool("zapret", true, "скачать и установить zapret2")
 	zapretVer := fs.String("zapret-version", "", "версия zapret2 (пусто = latest с GitHub)")
 	skipService := fs.Bool("skip-service", false, "не ставить systemd/procd службу")
-	password := fs.String("password", "", "пароль Web UI (неинтерактивно)")
-	noAuth := fs.Bool("no-auth", false, "сознательно отключить проверку доступа")
+	password := fs.String("password", "", "пароль Web UI (неинтерактивно; виден в ps — лучше ZATOR_PASSWORD)")
+	noAuth := fs.Bool("no-auth", false, "сознательно отключить проверку доступа (нужен -host или -listen-all)")
+	hostAck := fs.String("host", "", "при -no-auth: явный bind-хост (напр. 127.0.0.1) как подтверждение риска")
+	listenAll := fs.Bool("listen-all", false, "при -no-auth: явное согласие слушать все интерфейсы")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if *password != "" && *noAuth {
-		fmt.Fprintln(stderr, "нельзя одновременно -password и -no-auth")
+	passFlag := strings.TrimSpace(*password)
+	if passFlag == "" {
+		passFlag = strings.TrimSpace(os.Getenv("ZATOR_PASSWORD"))
+	}
+	if passFlag != "" && *noAuth {
+		fmt.Fprintln(stderr, "нельзя одновременно -password/ZATOR_PASSWORD и -no-auth")
 		return 2
+	}
+	if *noAuth && strings.TrimSpace(*hostAck) == "" && !*listenAll {
+		fmt.Fprintln(stderr, "-no-auth требует -host 127.0.0.1 (или другой) либо явный -listen-all")
+		return 2
+	}
+	if *password != "" {
+		fmt.Fprintln(stderr, "предупреждение: -password виден в списке процессов (ps); предпочтительнее ZATOR_PASSWORD")
 	}
 	a, err := app.Load()
 	if err != nil {
@@ -147,9 +161,13 @@ func cmdInstall(args []string, stdout, stderr io.Writer) int {
 	switch {
 	case *noAuth:
 		a.DisableAuthExplicitly()
-		fmt.Fprintln(stderr, "внимание: проверка доступа отключена (-no-auth); Web UI открыт всей сети")
-	case *password != "":
-		if err := a.SetPassword(*password); err != nil {
+		if *listenAll || strings.TrimSpace(*hostAck) == "" || strings.TrimSpace(*hostAck) == "0.0.0.0" {
+			fmt.Fprintln(stderr, "внимание: проверка доступа отключена (-no-auth); для bind-all укажите zator webui -listen-all")
+		} else {
+			fmt.Fprintf(stderr, "внимание: проверка доступа отключена (-no-auth); при запуске укажите -host %s\n", strings.TrimSpace(*hostAck))
+		}
+	case passFlag != "":
+		if err := a.SetPassword(passFlag); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
@@ -162,7 +180,7 @@ func cmdInstall(args []string, stdout, stderr io.Writer) int {
 		pass, err := promptPassword(stderr, "Пароль Web UI: ", "Повтор пароля: ")
 		if err != nil {
 			fmt.Fprintln(stderr, err)
-			fmt.Fprintln(stderr, "подсказка: zator install -password '…' или zator install -no-auth")
+			fmt.Fprintln(stderr, "подсказка: zator install -password '…' / ZATOR_PASSWORD=… или zator install -no-auth -listen-all")
 			return 1
 		}
 		if err := a.SetPassword(pass); err != nil {
@@ -412,7 +430,8 @@ func cmdServe(name string, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	port := fs.Int("port", 0, "порт (по умолчанию из конфигурации, 17682)")
-	host := fs.String("host", "", "адрес привязки (по умолчанию все интерфейсы)")
+	host := fs.String("host", "", "адрес привязки (пусто + auth = все интерфейсы; без auth нужен явный -host или -listen-all)")
+	listenAll := fs.Bool("listen-all", false, "явно слушать все интерфейсы (обязательно при auth_enabled=false без -host)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -423,6 +442,20 @@ func cmdServe(name string, args []string, stdout, stderr io.Writer) int {
 	}
 	if *port != 0 {
 		a.Config.Port = *port
+	}
+	bindHost := strings.TrimSpace(*host)
+	if !a.Config.AuthRequired() {
+		if bindHost == "" && !*listenAll {
+			fmt.Fprintln(stderr, "auth отключён: укажите -host 127.0.0.1 (или другой) либо явный -listen-all")
+			return 2
+		}
+		if *listenAll && bindHost == "" {
+			fmt.Fprintln(stderr, "ВНИМАНИЕ: Web UI без проверки доступа слушает ВСЕ интерфейсы (-listen-all); ограничьте firewall")
+		} else if bindHost != "" {
+			fmt.Fprintf(stderr, "внимание: Web UI без проверки доступа на %s\n", bindHost)
+		}
+	} else if bindHost == "" {
+		fmt.Fprintf(stderr, "Web UI с auth слушает все интерфейсы (:%d); ограничьте доступ firewall / reverse proxy\n", a.Config.Port)
 	}
 	// Восстановить стоковые blob, если каталог пуст (ручная замена бинарника / старый uninstall).
 	if err := a.EnsureStockFakes(); err != nil {
@@ -435,7 +468,7 @@ func cmdServe(name string, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	addr := net.JoinHostPort(*host, strconv.Itoa(a.Config.Port))
+	addr := net.JoinHostPort(bindHost, strconv.Itoa(a.Config.Port))
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           api.Handler(),

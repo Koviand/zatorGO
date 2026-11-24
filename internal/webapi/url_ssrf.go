@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -16,62 +17,69 @@ const (
 	domainImportMaxRedir = 3
 )
 
+// lookupIPFn — DNS для validatePublicHTTPURL (подмена в тестах pin/rebinding).
+var lookupIPFn = net.LookupIP
+
 // blockedImportHosts — имена, которые нельзя тянуть с роутера (SSRF).
 var blockedImportHosts = map[string]struct{}{
-	"localhost":               {},
-	"localhost.localdomain":   {},
-	"metadata":                {},
+	"localhost":                {},
+	"localhost.localdomain":    {},
+	"metadata":                 {},
 	"metadata.google.internal": {},
-	"metadata.goog":           {},
+	"metadata.goog":            {},
 }
 
-func validatePublicHTTPURL(raw string) (*url.URL, error) {
+// validatePublicHTTPURL проверяет URL и возвращает закреплённые публичные IP
+// первого resolve (защита от DNS rebinding при Dial).
+func validatePublicHTTPURL(raw string) (*url.URL, []net.IP, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return nil, fmt.Errorf("пустой URL")
+		return nil, nil, fmt.Errorf("пустой URL")
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
-		return nil, fmt.Errorf("некорректный URL")
+		return nil, nil, fmt.Errorf("некорректный URL")
 	}
 	switch strings.ToLower(u.Scheme) {
 	case "http", "https":
 	default:
-		return nil, fmt.Errorf("нужен http(s) URL")
+		return nil, nil, fmt.Errorf("нужен http(s) URL")
 	}
 	if u.User != nil {
-		return nil, fmt.Errorf("URL с учётными данными запрещён")
+		return nil, nil, fmt.Errorf("URL с учётными данными запрещён")
 	}
 	host := strings.ToLower(strings.TrimSpace(u.Hostname()))
 	if host == "" {
-		return nil, fmt.Errorf("URL без хоста")
+		return nil, nil, fmt.Errorf("URL без хоста")
 	}
 	if _, bad := blockedImportHosts[host]; bad {
-		return nil, fmt.Errorf("хост %s запрещён", host)
+		return nil, nil, fmt.Errorf("хост %s запрещён", host)
 	}
 	if strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") {
-		return nil, fmt.Errorf("локальный хост запрещён")
+		return nil, nil, fmt.Errorf("локальный хост запрещён")
 	}
 	if ip := net.ParseIP(host); ip != nil {
 		if blockedImportIP(ip) {
-			return nil, fmt.Errorf("внутренний IP запрещён")
+			return nil, nil, fmt.Errorf("внутренний IP запрещён")
 		}
-		return u, nil
+		return u, []net.IP{ip}, nil
 	}
-	// DNS: все ответы должны быть публичными (иначе SSRF через приватный A-запись).
-	ips, err := net.LookupIP(host)
+	// DNS: все ответы должны быть публичными; пиним этот набор для Dial.
+	ips, err := lookupIPFn(host)
 	if err != nil {
-		return nil, fmt.Errorf("не удалось разрешить хост: %w", err)
+		return nil, nil, fmt.Errorf("не удалось разрешить хост: %w", err)
 	}
 	if len(ips) == 0 {
-		return nil, fmt.Errorf("хост не резолвится")
+		return nil, nil, fmt.Errorf("хост не резолвится")
 	}
+	pinned := make([]net.IP, 0, len(ips))
 	for _, ip := range ips {
 		if blockedImportIP(ip) {
-			return nil, fmt.Errorf("хост резолвится во внутренний адрес")
+			return nil, nil, fmt.Errorf("хост резолвится во внутренний адрес")
 		}
+		pinned = append(pinned, ip)
 	}
-	return u, nil
+	return u, pinned, nil
 }
 
 func blockedImportIP(ip net.IP) bool {
@@ -91,8 +99,20 @@ func blockedImportIP(ip net.IP) bool {
 	return false
 }
 
-func domainImportHTTPClient() *http.Client {
+// domainImportHTTPClient — HTTP-клиент с Dial только по уже проверенным IP
+// (без повторного Lookup, который мог бы уехать в private при rebinding).
+func domainImportHTTPClient(initialPins []net.IP) *http.Client {
+	return domainImportHTTPClientDial(initialPins, nil)
+}
+
+func domainImportHTTPClientDial(initialPins []net.IP, dial func(ctx context.Context, network, addr string) (net.Conn, error)) *http.Client {
 	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 0}
+	if dial == nil {
+		dial = dialer.DialContext
+	}
+	var mu sync.Mutex
+	pins := append([]net.IP(nil), initialPins...)
+
 	tr := &http.Transport{
 		Proxy:                 nil, // не ходим через env-proxy во внутреннюю сеть
 		ForceAttemptHTTP2:     true,
@@ -101,21 +121,23 @@ func domainImportHTTPClient() *http.Client {
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			host, port, err := net.SplitHostPort(addr)
+			_, port, err := net.SplitHostPort(addr)
 			if err != nil {
 				return nil, err
 			}
-			ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-			if err != nil {
-				return nil, err
+			mu.Lock()
+			cur := append([]net.IP(nil), pins...)
+			mu.Unlock()
+			if len(cur) == 0 {
+				return nil, fmt.Errorf("нет закреплённых адресов")
 			}
 			var last error
-			for _, ia := range ips {
-				if blockedImportIP(ia.IP) {
+			for _, ip := range cur {
+				if blockedImportIP(ip) {
 					last = fmt.Errorf("внутренний IP запрещён")
 					continue
 				}
-				conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ia.IP.String(), port))
+				conn, err := dial(ctx, network, net.JoinHostPort(ip.String(), port))
 				if err == nil {
 					return conn, nil
 				}
@@ -134,9 +156,13 @@ func domainImportHTTPClient() *http.Client {
 			if len(via) >= domainImportMaxRedir {
 				return fmt.Errorf("слишком много редиректов")
 			}
-			if _, err := validatePublicHTTPURL(req.URL.String()); err != nil {
+			_, newPins, err := validatePublicHTTPURL(req.URL.String())
+			if err != nil {
 				return fmt.Errorf("редирект запрещён: %w", err)
 			}
+			mu.Lock()
+			pins = newPins
+			mu.Unlock()
 			return nil
 		},
 	}

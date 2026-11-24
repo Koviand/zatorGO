@@ -48,6 +48,17 @@ tar -C "$STAGE" -czf "$OUT/zator-full.tar.gz" .
 cp "$ROOT/scripts/zator-launcher.sh" "$OUT/zator-launcher.sh"
 cp "$ROOT/dist"/zator-linux-* "$OUT/vendor/" 2>/dev/null || true
 
+# SHA256SUMS + Ed25519.sig — ApplyBundle fail-closed без них.
+(cd "$OUT" && sha256sum zator-full.tar.gz > SHA256SUMS)
+if [[ -n "${ZATOR_RELEASE_SIGNING_KEY:-}" ]]; then
+  (cd "$ROOT" && go run ./scripts/sign-sha256sums.go -in "$OUT/SHA256SUMS" -out "$OUT/SHA256SUMS.sig")
+elif [[ -f "$ROOT/dist/SHA256SUMS.sig" && -f "$ROOT/dist/SHA256SUMS" ]]; then
+  # Если dist уже содержит подпись релиза — не подменяем SUMS архива без ключа.
+  echo "warn: ZATOR_RELEASE_SIGNING_KEY не задан; положите SHA256SUMS.sig вручную рядом с бандлом" >&2
+else
+  echo "warn: ZATOR_RELEASE_SIGNING_KEY не задан — бандл без SHA256SUMS.sig; ApplyBundle отклонит" >&2
+fi
+
 # zapret2 в vendor/ — установка без GitHub (ZATOR_VENDOR / LocalArchive).
 ZAPRET_VER="${ZAPRET2_VERSION:-1.0.7-reasm-fix}"
 ZAPRET_ASSET="zapret2-v${ZAPRET_VER}.tar.gz"

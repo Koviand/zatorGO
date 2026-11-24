@@ -140,13 +140,26 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		if setCookie {
-			s.setSessionCookie(w)
+			s.setSessionCookie(w, r)
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
-func (s *Server) setSessionCookie(w http.ResponseWriter) {
+const sessionCookieMaxAge = 7 * 24 * 3600 // 7 дней
+
+// requestLooksHTTPS — TLS или reverse-proxy с X-Forwarded-Proto: https.
+func requestLooksHTTPS(r *http.Request) bool {
+	if r != nil && r.TLS != nil {
+		return true
+	}
+	if r == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
+}
+
+func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request) {
 	tok := s.app.Config.SessionToken
 	if tok == "" {
 		return
@@ -157,16 +170,18 @@ func (s *Server) setSessionCookie(w http.ResponseWriter) {
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		MaxAge:   30 * 24 * 3600,
+		Secure:   requestLooksHTTPS(r),
+		MaxAge:   sessionCookieMaxAge,
 	})
 }
 
-func (s *Server) clearSessionCookie(w http.ResponseWriter) {
+func (s *Server) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     CookieName,
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   requestLooksHTTPS(r),
 		MaxAge:   -1,
 	})
 }
@@ -369,7 +384,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, p params) {
 		writeErr(w, err)
 		return
 	}
-	s.setSessionCookie(w)
+	s.setSessionCookie(w, r)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "auth_required": true})
 }
 
@@ -380,7 +395,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request, _ params) 
 	}
 	// Без auth — только сброс cookie в браузере.
 	if !s.app.AuthRequiredLocked() {
-		s.clearSessionCookie(w)
+		s.clearSessionCookie(w, r)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "auth_required": false})
 		return
 	}
@@ -390,6 +405,6 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request, _ params) 
 		_ = s.app.Save()
 	}
 	// Без валидной сессии: только clear cookie, session_token НЕ трогаем (anti-CSRF logout).
-	s.clearSessionCookie(w)
+	s.clearSessionCookie(w, r)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
