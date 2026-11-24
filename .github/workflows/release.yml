@@ -108,7 +108,16 @@ jobs:
           GOMIPS: ${{ matrix.gomips }}
           GOMIPS64: ${{ matrix.gomips64 }}
         run: |
-          ver="${GITHUB_REF_NAME:-dev}"
+          # Tag v0.1.43 → version 0.1.43 (как Makefile / файл VERSION).
+          ref="${GITHUB_REF_NAME:-dev}"
+          ver="${ref#v}"
+          if [ -f VERSION ]; then
+            want="$(tr -d ' \t\r\n' < VERSION)"
+            if [ "$ver" != "$want" ] && [ "$ref" != "dev" ]; then
+              echo "VERSION=$want не совпадает с tag/ref=$ref (ожидалось $want)" >&2
+              exit 1
+            fi
+          fi
           mkdir -p dist
           go build -trimpath -ldflags "-s -w -X github.com/AloofLibra/zator.versionOverride=${ver}" \
             -o "dist/zator-linux-${{ matrix.name }}" ./cmd/zator
