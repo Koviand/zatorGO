@@ -3,6 +3,7 @@ package deploy
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"os"
 	"strings"
@@ -27,8 +28,13 @@ func TestSignVerifySHA256SUMS(t *testing.T) {
 	if err := VerifySHA256SUMS(pub, append(sums, 'x'), sigFile); !errors.Is(err, ErrBadSignature) {
 		t.Fatalf("tampered sums: %v", err)
 	}
-	// Битая подпись → отказ.
-	bad := []byte(strings.Replace(sigLine, "A", "B", 1) + "\n")
+	// Битая подпись → отказ (XOR первого байта декодированной sig, не Replace по «A»).
+	raw, err := ParseSignature([]byte(sigLine + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw[0] ^= 0xff
+	bad := []byte(base64.StdEncoding.EncodeToString(raw) + "\n")
 	if err := VerifySHA256SUMS(pub, sums, bad); err == nil {
 		t.Fatal("expected bad signature error")
 	}

@@ -132,6 +132,9 @@ func (s *Server) postSupersweep(_ *http.Request, p params) (map[string]any, erro
 	}
 	switch action {
 	case "start":
+		if s.relockActive {
+			return nil, errf(http.StatusConflict, "Сейчас выполняется auto-relock; подождите")
+		}
 		scope, err := scopeParam(p)
 		if err != nil {
 			return nil, err
@@ -140,6 +143,11 @@ func (s *Server) postSupersweep(_ *http.Request, p params) (map[string]any, erro
 		sp.Scope = scope
 		if v := p.Get("tls_pref"); v != "" {
 			sp.TLSPref = netcheck.ParseTLSPref(v)
+		}
+		if raw := p.Get("workers"); strings.TrimSpace(raw) != "" {
+			sp.Workers = strings.FieldsFunc(raw, func(r rune) bool {
+				return r == ',' || r == ';' || r == ' ' || r == '\t' || r == '|'
+			})
 		}
 		if raw := p.Raw("domain"); strings.TrimSpace(raw) != "" {
 			sp.Domains = strings.FieldsFunc(raw, func(r rune) bool {
@@ -150,24 +158,28 @@ func (s *Server) postSupersweep(_ *http.Request, p params) (map[string]any, erro
 		if err := sw.Start(context.Background(), sp); err != nil {
 			switch {
 			case errors.Is(err, sweep.ErrBusy):
-				return nil, errf(http.StatusConflict, "Суперавтопрогон уже выполняется")
+				return nil, errCode(http.StatusConflict, CodeBusy, "Суперавтопрогон уже выполняется")
 			case errors.Is(err, sweep.ErrNoDomains):
 				return nil, errf(http.StatusBadRequest, "Нет корректных доменов РКН")
+			case errors.Is(err, sweep.ErrInvalidWorkers):
+				return nil, errf(http.StatusBadRequest, "Некорректные workers (ожидаются yt|gv|ds|rkn)")
 			case errors.Is(err, sweep.ErrDNSSpoofed):
-				return nil, errf(http.StatusConflict, "Системный DNS подменён или сломан: прогон не начат")
+				return nil, errCode(http.StatusConflict, CodeConflict, "Системный DNS подменён или сломан: прогон не начат")
 			case errors.Is(err, orchestra.ErrInvalid):
 				return nil, errf(http.StatusBadRequest, err.Error())
 			}
 			return nil, errf(http.StatusInternalServerError, "Не удалось запустить суперавтопрогон: "+err.Error())
 		}
+		s.publishEvent(Event{Type: "supersweep", State: "starting", Message: "supersweep started"})
 		return map[string]any{"ok": true, "started": true}, nil
 	case "cancel":
 		if err := sw.Cancel(); err != nil {
 			if errors.Is(err, sweep.ErrNotRunning) {
-				return nil, errf(http.StatusConflict, "Суперавтопрогон не запущен")
+				return nil, errCode(http.StatusConflict, CodeConflict, "Суперавтопрогон не запущен")
 			}
 			return nil, errf(http.StatusInternalServerError, "Не удалось отменить суперавтопрогон: "+err.Error())
 		}
+		s.publishEvent(Event{Type: "supersweep", State: "cancelled", Message: "supersweep cancelled"})
 		return map[string]any{"ok": true, "cancelled": true}, nil
 	}
 	return nil, errf(http.StatusBadRequest, "Некорректное действие: "+action)

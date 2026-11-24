@@ -103,7 +103,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		// Logout: всегда пропускаем до handler — там сами решим rotate vs clear-cookie-only.
 		if r.URL.Path == "/api/logout" || r.URL.Path == "/cgi-bin/logout.cgi" {
 			if !csrfOK(r) {
-				writeError(w, http.StatusForbidden, "Запрос отклонён (CSRF)")
+				writeErrorCode(w, http.StatusForbidden, CodeCSRF, "Запрос отклонён (CSRF)", "")
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -111,14 +111,14 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 		if isPublicAuthPath(r.URL.Path) || isStaticAsset(r.URL.Path) {
 			if isPublicAuthPath(r.URL.Path) && !csrfOK(r) {
-				writeError(w, http.StatusForbidden, "Запрос отклонён (CSRF)")
+				writeErrorCode(w, http.StatusForbidden, CodeCSRF, "Запрос отклонён (CSRF)", "")
 				return
 			}
 			next.ServeHTTP(w, r)
 			return
 		}
 		if !csrfOK(r) {
-			writeError(w, http.StatusForbidden, "Запрос отклонён (CSRF)")
+			writeErrorCode(w, http.StatusForbidden, CodeCSRF, "Запрос отклонён (CSRF)", "")
 			return
 		}
 		if !s.app.AuthRequiredLocked() {
@@ -127,7 +127,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 		ok, setCookie, limited := s.authorized(r)
 		if limited {
-			writeError(w, http.StatusTooManyRequests, "Слишком много попыток входа. Подождите несколько минут.")
+			writeErrorCode(w, http.StatusTooManyRequests, CodeRateLimit, "Слишком много попыток входа. Подождите несколько минут.", "")
 			return
 		}
 		if !ok {
@@ -136,7 +136,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			if !isAPIPath(r.URL.Path) {
 				w.Header().Set("WWW-Authenticate", `Basic realm="ZatorGO"`)
 			}
-			writeError(w, http.StatusUnauthorized, "Требуется авторизация")
+			writeErrorCode(w, http.StatusUnauthorized, CodeUnauthorized, "Требуется авторизация", "")
 			return
 		}
 		if setCookie {
@@ -350,13 +350,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, p params) {
 	}
 	ip := clientIP(r)
 	if !loginBegin(ip) {
-		writeError(w, http.StatusTooManyRequests, "Слишком много попыток входа. Подождите несколько минут.")
+		writeErrorCode(w, http.StatusTooManyRequests, CodeRateLimit, "Слишком много попыток входа. Подождите несколько минут.", "")
 		return
 	}
 	pass := p.Get("password")
 	if !s.app.VerifyPassword(pass) {
 		loginEndFail(ip)
-		writeError(w, http.StatusUnauthorized, "Неверный пароль")
+		writeErrorCode(w, http.StatusUnauthorized, CodeUnauthorized, "Неверный пароль", "")
 		return
 	}
 	loginOK(ip)

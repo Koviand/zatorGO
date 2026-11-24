@@ -39,10 +39,14 @@ func (s *Server) handleService(w http.ResponseWriter, r *http.Request, p params)
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
 
-	if action != "stop" && s.sweepRunningLocked() {
+	if action != "stop" && (s.relockActive || s.sweepRunningLocked()) {
+		detail := "дождитесь окончания или отмените supersweep"
+		if s.relockActive {
+			detail = "дождитесь окончания auto-relock"
+		}
 		writeJSON(w, http.StatusConflict, map[string]string{
-			"error":  "Служба занята суперавтопрогоном",
-			"detail": "дождитесь окончания или отмените supersweep",
+			"error":  "Служба занята суперавтопрогоном или auto-relock",
+			"detail": detail,
 		})
 		return
 	}
@@ -124,8 +128,8 @@ func (s *Server) checkCtx(r *http.Request) (context.Context, context.CancelFunc)
 	return context.WithTimeout(r.Context(), s.timeout)
 }
 
-// GET|POST /cgi-bin/check.cgi — полная проверка либо одного профиля (?profile=N).
-// Для profile: возвращает lock/scope/zapret2_running; wait_apply=1 ждёт TTL Lua.
+// GET|POST /cgi-bin/check.cgi — полная проверка либо профиля (?profile=N).
+// Batch (RM0c): profiles=1,2,4 → {"ok":true,"checks":[...]} (одиночный profile без обёртки).
 func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request, p params) {
 	if !requireMethod(w, r, http.MethodGet, http.MethodPost) {
 		return
@@ -137,42 +141,105 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request, p params) {
 	}
 	ctx, cancel := s.checkCtx(r)
 	defer cancel()
+
+	if ids := parseProfileList(p); len(ids) > 1 {
+		checks := make([]netcheck.CheckResponse, 0, len(ids))
+		for _, id := range ids {
+			resp, err := s.runProfileCheck(ctx, scope, id, p)
+			if err != nil {
+				writeErr(w, err)
+				return
+			}
+			checks = append(checks, resp)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "checks": checks})
+		return
+	}
+
 	profile := p.Get("profile")
+	if profile == "" && p.Get("profiles") != "" {
+		ids := parseProfileList(p)
+		if len(ids) == 1 {
+			resp, err := s.runProfileCheck(ctx, scope, ids[0], p)
+			if err != nil {
+				writeErr(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, resp)
+			return
+		}
+	}
+
 	var resp netcheck.CheckResponse
 	if profile == "" {
 		resp = s.checker.Check(ctx)
 	} else {
 		if !profileRe.MatchString(profile) {
-			writeError(w, http.StatusBadRequest, "Некорректный профиль")
+			writeErrorCode(w, http.StatusBadRequest, CodeValidation, "Некорректный профиль", "")
 			return
 		}
 		id, _ := strconv.Atoi(profile)
-		waitApply := p.Get("wait_apply") == "1" || strings.EqualFold(p.Get("wait_apply"), "true")
-		if waitApply {
-			timer := time.NewTimer(luaLockCacheTTL)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				writeError(w, http.StatusGatewayTimeout, "Таймаут ожидания применения лока")
-				return
-			case <-timer.C:
-			}
-			resp.WaitedApply = true
+		var cerr error
+		resp, cerr = s.runProfileCheck(ctx, scope, id, p)
+		if cerr != nil {
+			writeErr(w, cerr)
+			return
 		}
-		opts := netcheck.ProfileCheckOptions{}
-		if id == 2 {
-			opts.MediaURL = strings.TrimSpace(p.Get("media_url"))
-		}
-		checkResp := s.checker.CheckProfileOpts(ctx, id, opts)
-		checkResp.WaitedApply = resp.WaitedApply
-		resp = checkResp
-		s.annotateProfileCheck(&resp, scope, id, p.Get("expect_lock"))
-		s.annotateMediaHints(&resp)
 	}
 	if resp.Results == nil {
 		resp.Results = []netcheck.TargetResult{}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func parseProfileList(p params) []int {
+	raw := p.Get("profiles")
+	if raw == "" {
+		return nil
+	}
+	var ids []int
+	seen := map[int]bool{}
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" || !profileRe.MatchString(part) {
+			continue
+		}
+		id, _ := strconv.Atoi(part)
+		if id < 1 || id > 10 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func (s *Server) runProfileCheck(ctx context.Context, scope string, id int, p params) (netcheck.CheckResponse, error) {
+	var resp netcheck.CheckResponse
+	waitApply := p.Get("wait_apply") == "1" || strings.EqualFold(p.Get("wait_apply"), "true")
+	if waitApply {
+		timer := time.NewTimer(luaLockCacheTTL)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return resp, errCode(http.StatusGatewayTimeout, CodeTimeout, "Таймаут ожидания применения лока")
+		case <-timer.C:
+		}
+		resp.WaitedApply = true
+	}
+	opts := netcheck.ProfileCheckOptions{}
+	if id == 2 {
+		opts.MediaURL = strings.TrimSpace(p.Get("media_url"))
+	}
+	checkResp := s.checker.CheckProfileOpts(ctx, id, opts)
+	checkResp.WaitedApply = resp.WaitedApply
+	resp = checkResp
+	s.annotateProfileCheck(&resp, scope, id, p.Get("expect_lock"))
+	s.annotateMediaHints(&resp)
+	if resp.Results == nil {
+		resp.Results = []netcheck.TargetResult{}
+	}
+	return resp, nil
 }
 
 // annotateProfileCheck добавляет факты о локе и состоянии zapret2.

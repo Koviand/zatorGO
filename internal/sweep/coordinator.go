@@ -87,6 +87,8 @@ type Params struct {
 	// медиапробу. Любое другое значение (например resolver_unavailable)
 	// помечает результаты googlevideo как unknown (TLS/CDN-тест без медиаданных).
 	MediaStatus string
+	// Workers — подмножество фаз (yt|gv|ds|rkn). Пусто — все Phases.
+	Workers []string
 }
 
 // DefaultParams возвращает значения по умолчанию из supersweep.sh.
@@ -321,6 +323,9 @@ func (c *Coordinator) logf(format string, args ...any) {
 
 func (c *Coordinator) prepare(ctx context.Context, p Params) (*run, error) {
 	p = p.Normalize()
+	if len(p.Workers) > 0 && len(NormalizeWorkers(p.Workers)) == 0 {
+		return nil, ErrInvalidWorkers
+	}
 	targets, dropped := SanitizeDomains(p.Domains)
 	for _, d := range dropped {
 		c.logf("Отброшен некорректный домен: %s", d)
@@ -518,15 +523,15 @@ func (r *run) execute(ctx context.Context) (Report, error) {
 		_ = fsutil.AtomicWriteFile(r.path(fileMediaStatus), []byte(r.p.MediaStatus+"\n"), 0o644)
 	}
 
+	phases := NormalizeWorkers(r.p.Workers)
 	if ctx.Err() == nil {
-		r.alive = strings.Join(Phases, ",")
+		r.alive = strings.Join(phases, ",")
 		if err := r.setState(StateRunning); err != nil {
 			return Report{}, err
 		}
 	}
-
 	cancelled := ctx.Err() != nil
-	for i, phase := range Phases {
+	for i, phase := range phases {
 		if ctx.Err() != nil {
 			cancelled = true
 			break
@@ -541,7 +546,7 @@ func (r *run) execute(ctx context.Context) (Report, error) {
 			break
 		}
 		r.settleWorker(phase)
-		if phase != WorkerRKN && i < len(Phases)-1 {
+		if phase != WorkerRKN && i < len(phases)-1 {
 			c.logf("Пауза между фазами: %s", r.p.PhasePause)
 			if err := r.sleep(ctx, r.p.PhasePause); err != nil {
 				cancelled = true

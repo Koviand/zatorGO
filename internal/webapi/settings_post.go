@@ -35,6 +35,17 @@ func init() {
 		"config":             (*Server).postConfigRaw,
 		"update_apply":       (*Server).postUpdateApply,
 		"strategy_register":  (*Server).postStrategyRegister,
+		"auto_relock":               (*Server).postAutoRelock,
+		"sweep_on_provider_change":  (*Server).postSweepOnProviderChange,
+		"sweep_schedule_hours":      (*Server).postSweepSchedule,
+		"blob_fallback":             (*Server).postBlobFallback,
+		"journal_enabled":           (*Server).postJournalEnabled,
+		"recommendations_apply":     (*Server).postRecommendationsApply,
+		"fix_discord":               (*Server).postFixDiscord,
+		"sweep_broken":              (*Server).postSweepBroken,
+		"strategies_feed":           (*Server).postStrategiesFeed,
+		"scope_preset":              (*Server).postScopePreset,
+		"scope_copy_locks":          (*Server).postScopeCopyLocks,
 	}
 	for _, t := range toggles {
 		t := t

@@ -13,6 +13,7 @@ package sweep
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/AloofLibra/zator/internal/netcheck"
@@ -44,6 +45,39 @@ const (
 // Phases — порядок фаз суперавтопрогона.
 var Phases = []string{WorkerYT, WorkerGV, WorkerDS, WorkerRKN}
 
+// ProfileWorker возвращает имя фазы supersweep для профиля 1/2/3/4.
+func ProfileWorker(profile int) (string, bool) {
+	w, ok := profileWorkers[profile]
+	return w, ok
+}
+
+// NormalizeWorkers фильтрует и упорядочивает имена фаз.
+// nil/пустой список → все Phases (полный прогон).
+// Непустой ввод без валидных yt|gv|ds|rkn → nil (не подменять полным прогоном).
+func NormalizeWorkers(workers []string) []string {
+	if len(workers) == 0 {
+		return append([]string(nil), Phases...)
+	}
+	want := map[string]bool{}
+	for _, w := range workers {
+		w = strings.ToLower(strings.TrimSpace(w))
+		switch w {
+		case WorkerYT, WorkerGV, WorkerDS, WorkerRKN:
+			want[w] = true
+		}
+	}
+	if len(want) == 0 {
+		return nil
+	}
+	var out []string
+	for _, p := range Phases {
+		if want[p] {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // Токены результата одной стратегии.
 const (
 	TokenOK      = "ok"
@@ -60,6 +94,8 @@ var (
 	ErrNotRunning = errors.New("sweep: суперавтопрогон не запущен")
 	// ErrNoDomains — после проверки не осталось корректных доменов РКН.
 	ErrNoDomains = errors.New("sweep: нет корректных доменов РКН")
+	// ErrInvalidWorkers — workers= задан, но нет валидных yt|gv|ds|rkn.
+	ErrInvalidWorkers = errors.New("sweep: некорректные workers (ожидаются yt|gv|ds|rkn)")
 	// ErrNoStrategies — не удалось определить число стратегий профиля.
 	ErrNoStrategies = errors.New("sweep: не удалось определить число стратегий профиля")
 	// ErrDNSSpoofed — предпроверка DNS обнаружила подмену; прогон не начат.

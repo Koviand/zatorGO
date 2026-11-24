@@ -1,0 +1,3 @@
+# strategies-extra.tsv — signed feed (Ed25519, same key as SHA256SUMS.sig)
+# Format: profile<TAB>desync-line
+# Empty placeholder; real recipes published on GitHub Releases.

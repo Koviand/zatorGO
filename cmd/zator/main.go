@@ -17,6 +17,7 @@ import (
 
 	"github.com/AloofLibra/zator"
 	"github.com/AloofLibra/zator/internal/app"
+	"github.com/AloofLibra/zator/internal/config"
 	"github.com/AloofLibra/zator/internal/deploy"
 	"github.com/AloofLibra/zator/internal/webapi"
 )
@@ -237,6 +238,7 @@ func cmdUpdate(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	force := fs.Bool("force", false, "скачать релиз даже если версия совпадает")
+	strategies := fs.Bool("strategies", false, "обновить подписанный каталог стратегий (strategies-extra.tsv)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -249,6 +251,9 @@ func cmdUpdate(args []string, stdout, stderr io.Writer) int {
 	if !a.Installed() {
 		fmt.Fprintf(stderr, "zator не установлен в %s — сначала: zator install\n", a.Paths.ZatorRoot)
 		return 1
+	}
+	if *strategies {
+		return cmdUpdateStrategies(a, stdout, stderr)
 	}
 	info, err := a.CreatePreUpdateBackup()
 	if err != nil {
@@ -322,6 +327,39 @@ func cmdUpdate(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// cmdUpdateStrategies — тот же путь, что Web UI setting=strategies_feed:
+// verify Ed25519 → state/strategies-extra.tsv → EnsureProfileStrategy (dedupe) → конфиг.
+func cmdUpdateStrategies(a *app.App, stdout, stderr io.Writer) int {
+	u := deploy.New(a.Paths)
+	res, err := u.ApplyStrategiesFeed(context.Background())
+	if err != nil {
+		fmt.Fprintf(stderr, "каталог стратегий: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "каталог стратегий: tag=%s строк=%d → %s\n", res.Tag, res.Applied, res.Path)
+
+	cfg, err := config.Load(a.Paths.ZapretConfig)
+	if err != nil {
+		fmt.Fprintf(stderr, "конфиг zapret2: %v\n", err)
+		return 1
+	}
+	applied := cfg.ApplyStrategiesFeedLines(res.Strategies)
+	if applied.Registered > 0 {
+		if err := cfg.Save(); err != nil {
+			fmt.Fprintf(stderr, "сохранение конфига: %v\n", err)
+			return 1
+		}
+	}
+	fmt.Fprintf(stdout, "регистрация: новых=%d пропущено(dedupe)=%d\n", applied.Registered, applied.Skipped)
+	for _, w := range applied.Warnings {
+		fmt.Fprintf(stderr, "предупреждение: %s\n", w)
+	}
+	if applied.Registered > 0 {
+		fmt.Fprintln(stdout, "нужен restart zapret2 (Web UI → Обзор или служба), чтобы datapath подхватил стратегии")
+	}
+	return 0
+}
+
 func cmdUninstall(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -355,9 +393,8 @@ func cmdUninstall(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// newWebHandler собирает обработчик Web UI: API (/cgi-bin/*.cgi и /api/*) и
-// статику. Без auth_enabled API открыт всем — предупреждение в stderr.
-func newWebHandler(a *app.App, stderr io.Writer) (http.Handler, error) {
+// newWebServer собирает Web UI API и статику. Без auth_enabled — предупреждение в stderr.
+func newWebServer(a *app.App, stderr io.Writer) (*webapi.Server, error) {
 	if !a.ConfigExists() {
 		return nil, fmt.Errorf("нет %s: сначала выполните zator install", a.ConfigPath)
 	}
@@ -368,7 +405,7 @@ func newWebHandler(a *app.App, stderr io.Writer) (http.Handler, error) {
 	if !a.Config.AuthRequired() {
 		fmt.Fprintln(stderr, "Web UI без проверки доступа (auth_enabled=false); включите: zator auth enable / set-password")
 	}
-	return api.Handler(), nil
+	return api, nil
 }
 
 func cmdServe(name string, args []string, stdout, stderr io.Writer) int {
@@ -392,7 +429,7 @@ func cmdServe(name string, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "предупреждение files/fake: %v\n", err)
 	}
 
-	handler, err := newWebHandler(a, stderr)
+	api, err := newWebServer(a, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "ошибка инициализации Web UI: %v\n", err)
 		return 1
@@ -401,7 +438,7 @@ func cmdServe(name string, args []string, stdout, stderr io.Writer) int {
 	addr := net.JoinHostPort(*host, strconv.Itoa(a.Config.Port))
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           handler,
+		Handler:           api.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		// Тело: формы до 4 МиБ, бэкап до 32 МиБ; долгие update/restart без WriteTimeout.
 		ReadTimeout: 5 * time.Minute,
@@ -415,6 +452,7 @@ func cmdServe(name string, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "предупреждение googlevideo-сбор: %v\n", err)
 	}
 	defer a.StopGooglevideoCollection()
+	api.StartBackground(ctx)
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()

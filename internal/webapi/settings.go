@@ -96,7 +96,18 @@ func (s *Server) settingGet(_ context.Context, cfg *config.Config, name string) 
 		return map[string]any{"state": st, "enabled": st == "включено"}, nil
 	case "quic443", "quic443_state":
 		st := cfg.QUIC443Text()
-		return map[string]any{"state": st, "enabled": st == "включены"}, nil
+		enabled := st == "включены"
+		mode := "disable"
+		if enabled {
+			mode = "fake"
+		}
+		return map[string]any{
+			"state": st, "enabled": enabled,
+			// BP6: явная политика QUIC для оператора.
+			"quic_mode":  mode,
+			"applies_to": []string{"YouTube QUIC (profile 5)", "UDP_YT / googlevideo h3"},
+			"warning":    "Выключение QUIC fakes может затронуть Discord voice (UDP), если клиент уходит в QUIC.",
+		}, nil
 	case "dns_desync", "dns_desync_state":
 		st := cfg.DNSDesyncText()
 		return map[string]any{"state": st, "enabled": st == "Включен"}, nil
@@ -118,6 +129,10 @@ func (s *Server) settingGet(_ context.Context, cfg *config.Config, name string) 
 		return s.updateCheck(), nil
 	case "recommendations":
 		return s.recommendations(), nil
+	case "auto_relock", "bypass_flags":
+		return s.bypassFlagsGet(), nil
+	case "strategy_journal":
+		return s.journalRecentGet(), nil
 	case "config_raw", "config":
 		return s.configRawGet(), nil
 	case "nfqws2_errors", "errors":

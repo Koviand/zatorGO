@@ -4,7 +4,8 @@
 //
 // Каждый эндпоинт доступен по двум путям: /cgi-bin/<name>.cgi (совместимость с
 // фронтендом) и /api/<name> (чистый алиас). Ответы — всегда JSON
-// `application/json; charset=utf-8`; ошибки имеют вид {"error":"текст"}.
+// `application/json; charset=utf-8`. Ошибки: {"ok":false,"error":"…","code":"…"}
+// (поле error сохранено для старых клиентов).
 //
 // # Авторизация
 //
@@ -117,12 +118,25 @@ type Server struct {
 	cfgMu  sync.Mutex // сериализует изменения config
 	listMu sync.Mutex // сериализует изменения списков доменов
 
-	// runtimeMu сериализует start/stop/restart zapret2 и supersweep start/cancel,
+	// runtimeMu сериализует start/stop/restart zapret2, supersweep и auto-relock,
 	// чтобы не гонять службу во время прогона и наоборот.
 	runtimeMu sync.Mutex
+	// relockActive — tryRelock выполняется (проверять под runtimeMu).
+	relockActive bool
 
 	sweepMu sync.Mutex
 	sweeper Sweeper
+
+	flags      *bypassFlagsStore
+	lockOrigin *lockOriginStore
+	journal    *journalStore
+	relock     *relockMonitor
+	prober     StrategyProber // nil → NfqwsProbe; тесты подставляют stub
+
+	schedMu     sync.Mutex
+	schedCancel context.CancelFunc
+
+	events *eventHub // long-poll /api/events (RM0b)
 }
 
 // New создаёт сервер.
@@ -168,6 +182,11 @@ func New(opts Options) (*Server, error) {
 	s.store.MaxStrategy = s.maxStrategy
 	s.domains = domains.New(s.paths)
 	s.domains.Locks = s.store // один Store на каталог orchestra
+	s.flags = newBypassFlagsStore(s.paths.StateDir)
+	s.lockOrigin = newLockOriginStore(s.paths.StateOrchestraDir())
+	s.journal = newJournalStore(s.paths.StateDir)
+	s.relock = newRelockMonitor(s)
+	s.events = newEventHub()
 	return s, nil
 }
 
@@ -187,10 +206,13 @@ type endpoint func(s *Server, w http.ResponseWriter, r *http.Request, p params)
 var endpoints = map[string]endpoint{
 	"status":       (*Server).handleStatus,
 	"state":        (*Server).handleState,
+	"capabilities": (*Server).handleCapabilities,
 	"set-lock":     (*Server).handleSetLock,
 	"clear-lock":   (*Server).handleClearLock,
 	"service":      (*Server).handleService,
 	"check":        (*Server).handleCheck,
+	"repair":       (*Server).handleRepair,
+	"events":       (*Server).handleEvents,
 	"domains":      (*Server).handleDomains,
 	"backups":      (*Server).handleBackups,
 	"scopes":       (*Server).handleScopes,
@@ -315,27 +337,54 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	writeErrorCode(w, status, codeFromStatus(status), msg, "")
 }
 
-// apiError — ошибка с HTTP-статусом.
+// writeErrorCode пишет envelope {"ok":false,"error","code"} + опциональный detail.
+func writeErrorCode(w http.ResponseWriter, status int, code, msg, detail string) {
+	if code == "" {
+		code = codeFromStatus(status)
+	}
+	body := map[string]any{
+		"ok":    false,
+		"error": msg,
+		"code":  code,
+	}
+	if detail != "" {
+		body["detail"] = detail
+	}
+	writeJSON(w, status, body)
+}
+
+// apiError — ошибка с HTTP-статусом и стабильным code.
 type apiError struct {
 	Status int
+	Code   string
 	Msg    string
+	Detail string
 }
 
 func (e *apiError) Error() string { return e.Msg }
 
-func errf(status int, msg string) *apiError { return &apiError{Status: status, Msg: msg} }
+func errf(status int, msg string) *apiError {
+	return &apiError{Status: status, Code: codeFromStatus(status), Msg: msg}
+}
+
+func errCode(status int, code, msg string) *apiError {
+	if code == "" {
+		code = codeFromStatus(status)
+	}
+	return &apiError{Status: status, Code: code, Msg: msg}
+}
 
 // writeErr отвечает ошибкой; не-apiError превращается в 500.
 func writeErr(w http.ResponseWriter, err error) {
 	var ae *apiError
 	if errors.As(err, &ae) {
-		writeError(w, ae.Status, ae.Msg)
+		writeErrorCode(w, ae.Status, ae.Code, ae.Msg, ae.Detail)
 		return
 	}
-	writeError(w, http.StatusInternalServerError, err.Error())
+	writeErrorCode(w, http.StatusInternalServerError, CodeInternal, err.Error(), "")
 }
 
 // requireMethod допускает только перечисленные методы (иначе 405).
@@ -354,7 +403,7 @@ func requireMethod(w http.ResponseWriter, r *http.Request, methods ...string) bo
 
 // errNotInstalled — живой config zapret2 отсутствует.
 func (s *Server) notInstalledErr() *apiError {
-	return &apiError{Status: http.StatusServiceUnavailable,
+	return &apiError{Status: http.StatusServiceUnavailable, Code: CodeUnavailable,
 		Msg: "zapret2 не установлен: нет файла " + s.paths.ZapretConfig}
 }
 

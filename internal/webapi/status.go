@@ -39,6 +39,9 @@ type statusProfile struct {
 	MaxStrategy int    `json:"max_strategy"`
 	Scope       string `json:"scope"`
 	LockSource  string `json:"lock_source"`
+	// LockOrigin — sidecar apply-источник (recommendations/auto_relock/…);
+	// не путать с LockSource (orchestra: scoped|default|auto|conflict).
+	LockOrigin string `json:"lock_origin,omitempty"`
 
 	IsUDPGames      bool  `json:"is_udp_games,omitempty"`
 	UDPGamesEnabled *bool `json:"udp_games_enabled,omitempty"`
@@ -108,6 +111,10 @@ func (s *Server) effectiveLock(scope string, id int) (display, source string) {
 
 func (s *Server) statusPayload(ctx context.Context, scope string) map[string]any {
 	cfg, _ := s.readConfig()
+	origins := map[int]string{}
+	if s.lockOrigin != nil {
+		origins = s.lockOrigin.Map()
+	}
 	profiles := make([]statusProfile, 0, config.MaxProfile)
 	for _, pr := range cfg.Profiles() {
 		lock, src := s.effectiveLock(scope, pr.ID)
@@ -115,6 +122,12 @@ func (s *Server) statusPayload(ctx context.Context, scope string) map[string]any
 			Profile: pr.ID, Label: pr.Label, Description: pr.Description,
 			CurrentLock: lock, MaxStrategy: pr.MaxStrategy,
 			Scope: scope, LockSource: src,
+		}
+		// Origin только при живом локе — иначе sidecar мог устареть после ручного auto.
+		if lock != "" && lock != "auto" {
+			if o := origins[pr.ID]; o != "" {
+				sp.LockOrigin = o
+			}
 		}
 		switch pr.ID {
 		case config.ProfileUDPGames:
@@ -191,16 +204,18 @@ func (s *Server) healthPayload(zapretRunning bool) map[string]any {
 		postVerify, _ = s.app.PostUpdateVerifyStatus()
 		fwEnsure, _ = s.app.FwEnsureStatus()
 	}
+	validator := s.validatorHealth()
 	overall := "ok"
 	switch {
 	case want && !zapretRunning:
 		overall = "down"
-	case warns > 0 || postVerify == "fail" || fwEnsure == "fail" || (zapretRunning && !argsOK):
+	case warns > 0 || postVerify == "fail" || fwEnsure == "fail" || (zapretRunning && !argsOK) ||
+		validator == validatorHealthDegraded:
 		overall = "degraded"
 	case !zapretRunning && !want:
 		overall = "ok"
 	}
-	return map[string]any{
+	out := map[string]any{
 		"overall":            overall,
 		"zapret2_running":    zapretRunning,
 		"want_running":       want,
@@ -211,7 +226,12 @@ func (s *Server) healthPayload(zapretRunning bool) map[string]any {
 		"args_present":       argsOK,
 		"post_update_verify": postVerify,
 		"service_warnings":   warns,
+		"validator":          validator,
 	}
+	for k, v := range s.healthRelockPayload() {
+		out[k] = v
+	}
+	return out
 }
 
 // GET /cgi-bin/status.cgi
@@ -299,6 +319,7 @@ func (s *Server) versionPayload() map[string]any {
 }
 
 // GET /cgi-bin/state.cgi — агрегат начальной инициализации.
+// include=capabilities,journal,health — доп. блоки (RM0c), через запятую.
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request, p params) {
 	if !requireMethod(w, r, http.MethodGet, http.MethodPost) {
 		return
@@ -322,9 +343,10 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request, p params) {
 	} else {
 		backups = v
 	}
+	status := s.statusPayload(r.Context(), scope)
 	out := map[string]any{
 		"auth_required": s.app.AuthRequiredLocked(),
-		"status":        s.statusPayload(r.Context(), scope),
+		"status":        status,
 		"version":       s.versionPayload(),
 		"scopes":        s.scopesPayload(cfg),
 		"tls_blob":      section(""),
@@ -347,6 +369,16 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request, p params) {
 		"client_scope":  section("client_scope"),
 		"nfqws2_errors": section("nfqws2_errors"),
 		"backups":       backups,
+	}
+	for _, part := range strings.Split(p.Get("include"), ",") {
+		switch strings.ToLower(strings.TrimSpace(part)) {
+		case "capabilities":
+			out["capabilities"] = s.capabilitiesPayload()
+		case "journal":
+			out["journal"] = s.journalRecentGet()
+		case "health":
+			out["health"] = status["health"]
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -559,6 +591,13 @@ func (s *Server) handleSetLock(w http.ResponseWriter, r *http.Request, p params)
 		writeLockFailure(w, err, "Не удалось сохранить состояние профиля")
 		return
 	}
+	origin := ""
+	if n == 0 {
+		_ = s.lockOrigin.Set(id, "")
+	} else {
+		_ = s.lockOrigin.Set(id, OriginManual)
+		origin = OriginManual
+	}
 	lock := orchestra.Strategy(n).String()
 	out := map[string]any{
 		"ok":       true,
@@ -567,6 +606,9 @@ func (s *Server) handleSetLock(w http.ResponseWriter, r *http.Request, p params)
 		"changed":  prev != lock,
 		"scope":    scope,
 		"profile":  id,
+	}
+	if origin != "" {
+		out["origin"] = origin
 	}
 	if id == 6 {
 		if w := s.voicePorts(r.Context(), n != 0); w != "" {
@@ -609,6 +651,7 @@ func (s *Server) handleClearLock(w http.ResponseWriter, r *http.Request, p param
 		writeLockFailure(w, err, "Не удалось сбросить состояние профиля")
 		return
 	}
+	_ = s.lockOrigin.Set(id, "")
 	out := map[string]any{
 		"ok":       true,
 		"previous": prev,

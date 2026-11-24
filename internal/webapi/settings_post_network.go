@@ -118,6 +118,7 @@ func (s *Server) postProviderSet(_ *http.Request, p params) (map[string]any, err
 }
 
 func (s *Server) postProviderRedetect(r *http.Request, _ params) (map[string]any, error) {
+	prevDisplay := s.providerText()
 	res, err := s.provider.Redetect(r.Context())
 	if err != nil {
 		if errors.Is(err, provider.ErrNotDetected) {
@@ -129,6 +130,8 @@ func (s *Server) postProviderRedetect(r *http.Request, _ params) (map[string]any
 		}
 		return nil, errf(http.StatusBadGateway, "Не удалось определить провайдера: "+err.Error())
 	}
+	// Сравниваем display целиком: смена ASN/бренда/города → soft-sweep при флаге.
+	s.maybeSweepOnProviderChange(prevDisplay, prevDisplay, res.Display, res.Brand)
 	return map[string]any{
 		"ok":       true,
 		"provider": res.Display,

@@ -70,6 +70,7 @@ func (s *Server) postStrategyRegister(r *http.Request, p params) (map[string]any
 			lockWarning = "Стратегия добавлена, но зафиксировать не удалось: " + err.Error()
 		} else {
 			locked = true
+			_ = s.lockOrigin.Set(id, OriginManual)
 		}
 	}
 

@@ -52,3 +52,10 @@ go run ./scripts/sign-sha256sums.go -key-file .secrets/release.ed25519.b64 \
 ```
 
 Ротация ключа: сгенерировать новую пару, обновить secret, `ReleasePublicKeyB64`, PEM в launcher/`scripts/release-public.pem`, выпустить новый тег.
+
+## Каталог стратегий (strategies-extra.tsv)
+
+Тот же Ed25519-ключ подписывает ассет `strategies-extra.tsv` → `strategies-extra.tsv.sig` в GitHub Releases.
+
+- `zator update -strategies` и Web UI `setting=strategies_feed` **fail-closed** без валидной подписи.
+- После verify файл сохраняется в `state/strategies-extra.tsv`, затем строки `profile\tdesync` регистрируются в конфиг через `EnsureProfileStrategy` (идемпотентный dedupe). Повторный apply не плодит дубликаты; при новых стратегиях нужен restart zapret2.

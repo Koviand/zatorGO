@@ -518,6 +518,14 @@ func TestCoordinator_ParamValidation(t *testing.T) {
 	if _, err := e.c.Run(context.Background(), p); !errors.Is(err, ErrNoDomains) {
 		t.Errorf("no valid domains: %v", err)
 	}
+	pBad := fastParams()
+	pBad.Workers = []string{"broken", "nope"}
+	if _, err := e.c.Run(context.Background(), pBad); !errors.Is(err, ErrInvalidWorkers) {
+		t.Errorf("invalid workers: %v", err)
+	}
+	if e.c.Running() {
+		t.Error("must not run after invalid workers")
+	}
 	e2 := newCoordEnv(t, false, fullScenario, func(c *Config) {
 		c.MaxStrategy = func(p int) int {
 			if p == 4 {

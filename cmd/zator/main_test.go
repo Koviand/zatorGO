@@ -109,14 +109,14 @@ func TestWebHandlerServesAPIAndStatic(t *testing.T) {
 		t.Fatalf("no-auth install: %+v", a.Config)
 	}
 	var warn bytes.Buffer
-	h, err := newWebHandler(a, &warn)
+	h, err := newWebServer(a, &warn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(warn.String(), "без проверки доступа") {
 		t.Errorf("ожидалось сообщение об открытом доступе: %q", warn.String())
 	}
-	ts := httptest.NewServer(h)
+	ts := httptest.NewServer(h.Handler())
 	defer ts.Close()
 
 	get := func(path string) (*http.Response, []byte) {
@@ -157,7 +157,7 @@ func TestWebHandlerWarnsWithoutAuth(t *testing.T) {
 		t.Fatal(err)
 	}
 	var warn bytes.Buffer
-	if _, err := newWebHandler(a, &warn); err != nil {
+	if _, err := newWebServer(a, &warn); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(warn.String(), "без проверки доступа") {
@@ -171,7 +171,7 @@ func TestWebHandlerRequiresConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := newWebHandler(a, io.Discard); err == nil {
+	if _, err := newWebServer(a, io.Discard); err == nil {
 		t.Fatal("ожидалась ошибка без zator.json")
 	}
 }

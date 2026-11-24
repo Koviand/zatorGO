@@ -221,6 +221,17 @@ func (s *Server) googlevideoList(d listDef) (map[string]any, error) {
 	}
 	autoLocks := s.googlevideoAutoLocks()
 	seed := s.app.GooglevideoSeedStatus()
+	cfg, _ := s.readConfig()
+	wssizeOn := false
+	ipv4Count := 0
+	ipv4Fresh := false
+	if cfg != nil {
+		wssizeOn = cfg.GetDefault("Z2R_WSSIZE_RAMP_ENABLE", "1") == "1"
+	}
+	if cl := s.app.GooglevideoCentralList(); cl != nil {
+		ipv4Count = cl.Count()
+		ipv4Fresh = cl.Fresh()
+	}
 	return map[string]any{
 		"list": d.name, "title": d.title, "description": d.description, "kind": d.kind,
 		"is_custom_rkn": false, "max_strategy": 0, "items": items,
@@ -231,6 +242,15 @@ func (s *Server) googlevideoList(d listDef) (map[string]any, error) {
 			"last_host": seed.LastHost, "last_strategy": seed.LastStrat,
 			"last_result": seed.LastResult, "last_error": seed.LastError,
 			"updated_at": seed.UpdatedAt, "pending": seed.Pending,
+		},
+		// BP4: единый блок качества YouTube media CDN.
+		"quality": map[string]any{
+			"seed_state":       seed.State,
+			"auto_locks_count": len(autoLocks),
+			"ipv4_count":       ipv4Count,
+			"ipv4_fresh":       ipv4Fresh,
+			"wssize":           wssizeOn,
+			"hosts_count":      len(items),
 		},
 	}, nil
 }
@@ -257,6 +277,16 @@ func (s *Server) googlevideoAutoLocks() []map[string]any {
 // GET|POST /cgi-bin/domains.cgi
 func (s *Server) handleDomains(w http.ResponseWriter, r *http.Request, p params) {
 	if !requireMethod(w, r, http.MethodGet, http.MethodPost) {
+		return
+	}
+	// BP7: explain не требует list= (domains?action=explain&domain=).
+	if r.Method == http.MethodGet && strings.EqualFold(p.Get("action"), "explain") {
+		out, err := s.explainDomain(p.Get("domain"))
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, out)
 		return
 	}
 	d, ok := domainLists[p.Get("list")]
@@ -411,7 +441,15 @@ func (s *Server) domainsAction(r *http.Request, d listDef, p params, scope strin
 		if err := s.autoGuard(d); err != nil {
 			return nil, err
 		}
-		added, dups, skipped, ierr := s.domains.Import(kind, p.Raw("domain"))
+		raw := p.Raw("domain")
+		if u := strings.TrimSpace(p.Get("url")); u != "" {
+			body, ferr := s.fetchDomainListURL(r.Context(), u)
+			if ferr != nil {
+				return nil, errf(http.StatusBadGateway, "Не удалось скачать список: "+ferr.Error())
+			}
+			raw = body
+		}
+		added, dups, skipped, ierr := s.domains.Import(kind, raw)
 		if ierr != nil {
 			return nil, errf(http.StatusInternalServerError, "Не удалось записать список: "+ierr.Error())
 		}
@@ -499,6 +537,21 @@ func (s *Server) googlevideoAction(p params) (map[string]any, error) {
 		}
 		return map[string]any{
 			"ok": true, "status": res.Status, "count": res.Count, "generated": res.Generated,
+		}, nil
+	case "refresh_check":
+		// BP4: hosts sync + optional ipv4 + короткий check профиля 2.
+		n, err := s.app.SyncGooglevideoHosts()
+		if err != nil {
+			return nil, errf(http.StatusInternalServerError, "Не удалось обновить список: "+err.Error())
+		}
+		ips, _ := s.app.RefreshGooglevideoIPv4(context.Background(), false)
+		cctx, cancel := context.WithTimeout(context.Background(), relockCheckTimeout)
+		check := s.checker.CheckProfile(cctx, 2)
+		cancel()
+		return map[string]any{
+			"ok": true, "hosts_added": n,
+			"ipv4_status": ips.Status, "ipv4_count": ips.Count,
+			"check": check, "check_ok": profileCheckOK(check),
 		}, nil
 	case "add":
 		host, ok := googlevideoNormalize(p.Get("domain"))

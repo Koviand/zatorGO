@@ -70,3 +70,65 @@ func TestAppendProfileStrategyDiscord(t *testing.T) {
 		t.Fatalf("discord max not updated")
 	}
 }
+
+func TestEnsureProfileStrategyDedupe(t *testing.T) {
+	src := filepath.Join("..", "..", "assets", "config.default")
+	raw, err := os.ReadFile(src)
+	if err != nil {
+		t.Skip(err)
+	}
+	c := Parse(string(raw))
+	desync := "fake:blob=feed_tls:repeats=1"
+	n1, added, err := c.EnsureProfileStrategy(1, desync)
+	if err != nil || !added {
+		t.Fatalf("first: n=%d added=%v err=%v", n1, added, err)
+	}
+	max1 := c.ProfileMaxStrategyOrDefault(1)
+	n2, added, err := c.EnsureProfileStrategy(1, desync)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added || n2 != n1 {
+		t.Fatalf("dedupe: n=%d added=%v want n=%d added=false", n2, added, n1)
+	}
+	if c.ProfileMaxStrategyOrDefault(1) != max1 {
+		t.Fatalf("max grew on dedupe")
+	}
+	// с уже проставленным :strategy= — тоже dedupe
+	n3, added, err := c.EnsureProfileStrategy(1, desync+":strategy=99")
+	if err != nil || added || n3 != n1 {
+		t.Fatalf("strategy-stripped dedupe: n=%d added=%v", n3, added)
+	}
+}
+
+func TestApplyStrategiesFeedLines(t *testing.T) {
+	src := filepath.Join("..", "..", "assets", "config.default")
+	raw, err := os.ReadFile(src)
+	if err != nil {
+		t.Skip(err)
+	}
+	c := Parse(string(raw))
+	lines := []string{
+		"# comment",
+		"1\tfake:blob=feed_a:repeats=1",
+		"1\tfake:blob=feed_a:repeats=1",
+		"4\thostfakesplit:tcp_md5_feed",
+		"bad",
+		"99\tx",
+	}
+	r := c.ApplyStrategiesFeedLines(lines)
+	if r.Registered != 2 {
+		t.Fatalf("registered=%d want 2 (warns=%v)", r.Registered, r.Warnings)
+	}
+	if r.Skipped != 1 {
+		t.Fatalf("skipped=%d want 1", r.Skipped)
+	}
+	if len(r.Warnings) < 2 {
+		t.Fatalf("warnings=%v", r.Warnings)
+	}
+	r2 := c.ApplyStrategiesFeedLines(lines)
+	// две одинаковые строки profile 1 + одна profile 4 → 3 skipped
+	if r2.Registered != 0 || r2.Skipped != 3 {
+		t.Fatalf("reapply: %+v", r2)
+	}
+}
