@@ -53,7 +53,7 @@ jobs:
         run: |
           npm ci
           npm run build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: webui-assets
           path: assets/webui/
@@ -122,7 +122,7 @@ jobs:
           go build -trimpath -ldflags "-s -w -X github.com/AloofLibra/zator.versionOverride=${ver}" \
             -o "dist/zator-linux-${{ matrix.name }}" ./cmd/zator
           sha256sum "dist/zator-linux-${{ matrix.name }}" | tee "dist/zator-linux-${{ matrix.name }}.sha256"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: zator-linux-${{ matrix.name }}
           path: dist/*
