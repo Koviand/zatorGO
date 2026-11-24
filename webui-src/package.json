@@ -9,7 +9,7 @@
     "check": "vue-tsc --noEmit"
   },
   "dependencies": {
-    "vue": "^3.4.38",
+    "vue": "^3.5.46",
     "vue-router": "^4.4.3"
   },
   "devDependencies": {
