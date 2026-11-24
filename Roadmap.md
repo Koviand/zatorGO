@@ -1,6 +1,6 @@
 # Roadmap ZatorGO
 
-Конкретный backlog после закрытия [`Improvments.md`](Improvments.md) и кода [`Bypass.md`](Bypass.md).  
+Конкретный backlog после закрытия Improvements и кода [`Bypass.md`](Bypass.md).  
 Цель: **сначала** расширить взаимодействие с HTTP API (контракт, события, клиенты), затем довести Bypass до релиза, закрыть полевой QA, укрепить install/CI и UX Overview.
 
 **Ограничения (как в проекте):**
@@ -14,7 +14,6 @@
 
 | Документ | Роль |
 | --- | --- |
-| [`Improvments.md`](Improvments.md) | Инфра — код закрыт; долг колонки «Коммит» |
 | [`Bypass.md`](Bypass.md) | DPI-фичи BP1–BP12 — код в основном ☑, релиз/поле — нет |
 | [`docs/PARITY.md`](docs/PARITY.md) | Паритет + ручной QA ☐ |
 | [`docs/API.md`](docs/API.md) | Контракт API при новых полях |
@@ -158,8 +157,7 @@
 ### RM4 — Закрыть долг колонки «Коммит» в Improvements P1
 
 **Сделать:**
-- [ ] для каждого ID в [`Improvments.md`](Improvments.md) либо проставить хеш/тег, либо `n/a (squashed)` / ссылка на PR;
-- [ ] одна строка в конце: «план архивный, новый backlog — Roadmap.md».
+- [x] архивный `Improvments.md` удалён (код был закрыт; коммиты уже в истории `main`, backlog — этот Roadmap).
 
 **Критерий:** нет «код ☑ / коммит ☐» без пояснения.
 
@@ -328,7 +326,7 @@
 | RM1 | Bypass-WIP → коммиты + release | P0 | ☐ |
 | RM2 | Ручной QA PARITY | P0 | ☐ |
 | RM3 | Политика assets/webui | P0 | ☑ |
-| RM4 | Долг коммитов Improvements | P1 | ☐ |
+| RM4 | Долг коммитов Improvements | P1 | ☑ |
 | RM5 | Overview «Починить» | P0 | ☑ |
 | RM6 | strategies feed в каждом release | P1 | ☐ |
 | RM7 | BP1 полевые критерии | P0 | ☐ |

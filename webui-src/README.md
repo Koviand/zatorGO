@@ -19,6 +19,6 @@ npm run build
 | `/strategies` | StrategiesView |
 | `/manual` | ManualAddView |
 | `/domains` | DomainsView |
-| `/settings` | SettingsView (монолит) |
+| `/settings` | SettingsView (+ panels) |
 
 API: только `/api/*` (см. `src/api/endpoints.ts`, `docs/API.md`).
