@@ -1,0 +1,38 @@
+---
+description: Сборка и артефакты ZatorGO
+alwaysApply: true
+---
+
+# Сборка и артефакты
+
+## Критично: Web UI — это исходники + собранная статика
+`webui-src/` — исходники. `assets/webui/` — сгенерированный результат, который вшивается в бинарник. Если ты изменил что-либо в `webui-src/`:
+
+1. выполни `cd webui-src && npm ci && npm run build`;
+2. убедись, что изменения попали в `assets/webui/`;
+3. только после этого коммить оба каталога.
+
+Никогда не правь `assets/webui/` вручную и не коммить изменения в `webui-src` без пересборки статики.
+
+## Host drift (RM3): Windows ≠ Linux
+Vite на Windows может дать CRLF / иной бандл → CI `embed-check` красный.
+Перед push UI-изменений на `main`:
+
+- предпочтительно собрать на Linux (`npm ci && npm run build` в CI или WSL), **или**
+- скачать artifact `webui-assets` из workflow и заменить `assets/webui/`, **или**
+- после локального Windows-build: `git diff --ignore-cr-at-eol -- assets/webui` и при сомнении — пересобрать через CI.
+
+Release уже вшивает Linux-артефакт; локальный Windows-sync всё равно должен совпадать с LF.
+
+## Команды
+- `make test` — `go test ./...`
+- `make vet` — `go vet ./...`
+- `make build` — локальная сборка бинарника (CGO_ENABLED=0)
+- `make cross` — кросс-сборка под все архитектуры (через `scripts/crossbuild.sh`)
+- `npm run check` в `webui-src` — проверка типов Vue/TS
+
+## Перед завершением задачи
+Убедись, что:
+- `make test` и `make vet` проходят (если менялся Go-код);
+- `npm run check` проходит (если менялся `webui-src`);
+- при изменениях в `webui-src` выполнен `npm run build` и `assets/webui/` обновлён.

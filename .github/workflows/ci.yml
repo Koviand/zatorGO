@@ -63,8 +63,12 @@ jobs:
         run: |
           # Игнорируем CRLF: коммит с Windows не должен валить Linux CI.
           if ! git diff --ignore-cr-at-eol --exit-code -- assets/webui; then
-            echo "assets/webui не совпадает со сборкой:"
+            echo "assets/webui не совпадает со сборкой (host drift):"
             git status --porcelain -- assets/webui
             git diff --ignore-cr-at-eol -- assets/webui | head -n 200
+            echo ""
+            echo "How-to: на Linux — cd webui-src && npm ci && npm run build && закоммитьте assets/webui/;"
+            echo "  или скачайте artifact webui-assets из release/CI workflow и замените assets/webui/."
+            echo "  Windows CRLF игнорируется (--ignore-cr-at-eol); расхождение содержимого — нет."
             exit 1
           fi
