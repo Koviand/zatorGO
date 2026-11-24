@@ -8,7 +8,7 @@ import (
 
 func TestStaticAndNotFound(t *testing.T) {
 	e := newEnv(t, envOpts{})
-	for _, name := range []string{"/", "/index.html", "/app.js", "/styles.css", "/favicon.svg"} {
+	for _, name := range []string{"/", "/index.html", "/app.js", "/styles.css", "/favicon.png", "/icon.png"} {
 		resp, body := e.do(http.MethodGet, name, nil, nil)
 		if resp.StatusCode != http.StatusOK || len(body) == 0 {
 			t.Errorf("%s: status=%d len=%d", name, resp.StatusCode, len(body))

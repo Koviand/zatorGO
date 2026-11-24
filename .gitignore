@@ -9,11 +9,15 @@ dist/
 *.log
 .env
 .DS_Store
+Thumbs.db
+desktop.ini
 webui-src/node_modules/
 junk
 *.tmp
 *.bak
 *~
+*.orig
+*.rej
 
 # Приватный ключ подписи релизов (только pubkey в репозитории).
 .secrets/
