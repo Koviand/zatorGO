@@ -5,6 +5,12 @@ assets/extra_strats/** text eol=lf
 assets/init/** text eol=lf
 assets/lua/** text eol=lf
 assets/orchestra/** text eol=lf
+# Web UI: CI сверяет assets/webui с npm run build (Linux пишет LF).
+assets/webui/*.html text eol=lf
+assets/webui/*.js text eol=lf
+assets/webui/*.css text eol=lf
+assets/webui/*.svg text eol=lf
+assets/webui/*.png binary
 scripts/** text eol=lf
 *.sh text eol=lf
 *.tmpl text eol=lf
