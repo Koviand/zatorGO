@@ -107,14 +107,23 @@ func TestDetectLexra(t *testing.T) {
 }
 
 func TestReleaseArchAndBinaryAssetName(t *testing.T) {
-	if got := ReleaseArch(ArchLexra); got != ArchMIPSEL {
-		t.Fatalf("lexra → %q, want mipsel", got)
+	// Lexra: сохраняем endianness текущего бинарника; на amd64/Windows-хосте
+	// SelfArch ≠ mips/mipsel → канон ArchMIPS (BE, как upstream linux-lexra).
+	gotLex := ReleaseArch(ArchLexra)
+	self := SelfArch()
+	wantLex := ArchMIPS
+	if self == ArchMIPS || self == ArchMIPSEL {
+		wantLex = self
+	}
+	if gotLex != wantLex {
+		t.Fatalf("lexra → %q, want %q (self=%q)", gotLex, wantLex, self)
 	}
 	if got := ReleaseArch(ArchARM64); got != ArchARM64 {
 		t.Fatalf("arm64 → %q", got)
 	}
-	if got := BinaryAssetName(ArchLexra); got != "zator-linux-mipsel" {
-		t.Fatalf("BinaryAssetName(lexra) = %q", got)
+	wantAsset := "zator-linux-" + string(wantLex)
+	if got := BinaryAssetName(ArchLexra); got != wantAsset {
+		t.Fatalf("BinaryAssetName(lexra) = %q, want %q", got, wantAsset)
 	}
 	if got := BinaryAssetName(ArchRISCV64); got != "zator-linux-riscv64" {
 		t.Fatalf("BinaryAssetName(riscv64) = %q", got)

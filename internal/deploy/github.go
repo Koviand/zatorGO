@@ -88,8 +88,8 @@ func (u *Updater) FetchGitHubLatest(ctx context.Context) (*Latest, error) {
 }
 
 // binaryAssetName — имя ассета бинарника для текущей архитектуры устройства.
-// Учитывает ReleaseArch (lexra → mipsel) и детект платформы, а не только GOARCH
-// бинарника (на Lexra SelfArch() дал бы mips/mipsel без cpuinfo).
+// Учитывает ReleaseArch (Lexra → SelfArch/mips BE) и детект платформы, а не
+// только GOARCH бинарника (на Lexra SelfArch() без cpuinfo не увидит Lexra).
 func binaryAssetName() string {
 	arch := platform.Detect().Arch
 	if arch == platform.ArchUnknown {

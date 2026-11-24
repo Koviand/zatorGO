@@ -121,11 +121,12 @@ asset_url() {
 }
 
 arch=$(detect_arch)
-# Lexra (RLX) — нет отдельного Go-таргета; релизный ассет = mipsel softfloat.
+# Lexra (RLX) — нет отдельного Go-таргета. Upstream linux-lexra = big-endian (EB),
+# поэтому ассет zator = mips softfloat (не mipsel): иначе update/zapret endian mismatch.
 asset_arch=$arch
 if [ "$arch" = lexra ]; then
-  asset_arch=mipsel
-  echo "zator-launcher: архитектура Lexra — скачиваем zator-linux-mipsel" >&2
+  asset_arch=mips
+  echo "zator-launcher: архитектура Lexra — скачиваем zator-linux-mips" >&2
 fi
 asset="zator-linux-${asset_arch}"
 install_dir="$ZATOR_BIN_DIR"

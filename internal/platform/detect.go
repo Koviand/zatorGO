@@ -64,12 +64,17 @@ func ReleasedArches() []Arch {
 }
 
 // ReleaseArch возвращает имя ассета релиза для архитектуры устройства.
-// Lexra (RLX) → mipsel softfloat: отдельного GOARCH нет, upstream zapret
-// держит linux-lexra, а zator собирается как mipsel.
+// Lexra (RLX): отдельного GOARCH нет. Upstream zapret собирает linux-lexra
+// big-endian (EB); zator-ассет должен совпадать с endianness уже
+// установленного бинарника (SelfArch), иначе update подменит BE→LE.
+// Если SelfArch неизвестен — канон ArchMIPS (BE softfloat).
 func ReleaseArch(a Arch) Arch {
 	switch a {
 	case ArchLexra:
-		return ArchMIPSEL
+		if self := SelfArch(); self == ArchMIPS || self == ArchMIPSEL {
+			return self
+		}
+		return ArchMIPS
 	case ArchUnknown:
 		return ArchUnknown
 	default:

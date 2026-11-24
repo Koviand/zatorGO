@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -56,11 +57,33 @@ func buildArchive(t *testing.T, top string, extra ...fakeFile) []byte {
 
 func newServer(t *testing.T, version string, archive []byte, embedded bool, hits *int32) *httptest.Server {
 	t.Helper()
+	return newServerSums(t, version, archive, embedded, hits, false)
+}
+
+// newServerSums поднимает mock-релиз. perFileOnly=true — формат апстрима
+// (только binaries/…, без суммы tar.gz).
+func newServerSums(t *testing.T, version string, archive []byte, embedded bool, hits *int32, perFileOnly bool) *httptest.Server {
+	t.Helper()
 	asset := AssetName(version, embedded)
 	want := "/v" + version + "/" + asset
 	sumsPath := "/v" + version + "/sha256sum.txt"
-	sum := sha256.Sum256(archive)
-	sumsBody := hex.EncodeToString(sum[:]) + "  " + asset + "\n"
+	var sumsBody string
+	if perFileOnly {
+		// Считаем суммы тел бинарников из buildArchive (BIN:<arch>:<bin>).
+		var b strings.Builder
+		top := "zapret2-v" + version
+		for _, arch := range []string{"linux-x86_64", "linux-arm64", "linux-mipsel"} {
+			for _, name := range []string{"nfqws2", "ip2net", "mdig"} {
+				body := "BIN:" + arch + ":" + name
+				sum := sha256.Sum256([]byte(body))
+				fmt.Fprintf(&b, "%s  %s/binaries/%s/%s\n", hex.EncodeToString(sum[:]), top, arch, name)
+			}
+		}
+		sumsBody = b.String()
+	} else {
+		sum := sha256.Sum256(archive)
+		sumsBody = hex.EncodeToString(sum[:]) + "  " + asset + "\n"
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if hits != nil {
 			atomic.AddInt32(hits, 1)
@@ -257,6 +280,26 @@ func TestDownloadAndInstall(t *testing.T) {
 }
 
 func runtimeExecBit() bool { return os.PathSeparator == '/' }
+
+func TestInstallWithUpstreamPerFileSums(t *testing.T) {
+	// Реальный sha256sum.txt апстрима не содержит суммы tar.gz — только binaries/*.
+	ver := "0.8.2"
+	srv := newServerSums(t, ver, buildArchive(t, "zapret2-v"+ver), false, nil, true)
+	root := filepath.Join(t.TempDir(), "opt", "zapret2")
+	res, err := DownloadAndInstall(context.Background(), Options{
+		Root: root, Arch: platform.ArchX86_64, Version: ver,
+		ReleaseBase: srv.URL, Client: fastClient(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ArchDir != "linux-x86_64" || res.Skipped {
+		t.Fatalf("%+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(root, "binaries", "linux-x86_64", BinNfqws2)); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestInstallFromLocalArchive(t *testing.T) {
 	ver := "0.8.2"

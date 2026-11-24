@@ -199,16 +199,30 @@ func DownloadAndInstall(ctx context.Context, opts Options) (*Result, error) {
 	offline := opts.Offline || envTruthy("Z2R_OFFLINE") || envTruthy("ZATOR_OFFLINE")
 	local, hasLocal := resolveLocalArchive(opts, asset)
 
+	// Апстрим публикует sha256sum.txt с per-file суммами binaries/…, а не хешем tar.gz.
+	// Поэтому: сумма архива — если есть; иначе после распаковки сверяем nfqws2 (+ ip2net/mdig).
+	var sumIdx SumIndex
+	verifyBins := false
 	if opts.SHA256 == "" && !opts.AllowInsecure {
 		if offline && hasLocal {
 			return nil, fmt.Errorf("zapret: офлайн-установка требует Options.SHA256 (или AllowInsecure)")
 		}
-		sum, err := fetchArchiveSHA256(ctx, client, url, asset)
-		if err != nil {
-			return nil, fmt.Errorf("zapret: SHA256 обязателен (sha256sum.txt): %w", err)
+		if !offline {
+			idx, err := fetchSumIndex(ctx, client, url)
+			if err != nil {
+				return nil, fmt.Errorf("zapret: SHA256 обязателен (sha256sum.txt): %w", err)
+			}
+			sumIdx = idx
+			if sum := idx.ArchiveSum(asset); sum != "" {
+				opts.SHA256 = sum
+				opts.logf("SHA256 архива из sha256sum.txt: %s…", sum[:12])
+			} else if idx.HasBinarySums() {
+				verifyBins = true
+				opts.logf("sha256sum.txt: per-file суммы (проверка после распаковки)")
+			} else {
+				return nil, fmt.Errorf("zapret: в sha256sum.txt нет суммы для %s и нет binaries/*", asset)
+			}
 		}
-		opts.SHA256 = sum
-		opts.logf("SHA256 из sha256sum.txt: %s…", sum[:12])
 	}
 	if opts.SHA256 == "" && opts.AllowInsecure {
 		opts.logf("предупреждение: установка без проверки SHA256 (AllowInsecure)")
@@ -272,6 +286,11 @@ func DownloadAndInstall(ctx context.Context, opts Options) (*Result, error) {
 	}
 	if !fileExists(filepath.Join(stage, "binaries", archDir, BinNfqws2)) {
 		return nil, fmt.Errorf("zapret: %s не распакован", BinNfqws2)
+	}
+	if verifyBins {
+		if err := verifyStagedBinaries(stage, archDir, sumIdx); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := commit(root, stage, archDir, opts.IncludeLua); err != nil {
