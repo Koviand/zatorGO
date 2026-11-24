@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { applySetting, fetchSetting } from '../../api/endpoints'
-import { busyActive, busyButton, withBusy } from '../../stores/busy'
+import { BUSY_RESTART, busyActive, busyButton, withBusy, withBusyRestart } from '../../stores/busy'
 import { confirmDialog } from '../../stores/confirm'
 import { fetchAndApplyState } from '../../stores/state'
 import { showToast } from '../../stores/toast'
@@ -51,7 +51,7 @@ async function applyUpdates() {
   })
   if (!ok) return
   try {
-    await withBusy('upd-apply', async () => {
+    await withBusyRestart(async () => {
       const res = await applySetting.update_apply()
       if (res.up_to_date) {
         showToast('Уже актуально')
@@ -86,7 +86,7 @@ async function applyUpdates() {
     </p>
     <div class="actions">
       <button type="button" :disabled="busyActive" :class="{ 'is-busy': busyButton === 'upd-check' }" @click="checkUpdates">Проверить</button>
-      <button type="button" class="primary" :disabled="busyActive" :class="{ 'is-busy': busyButton === 'upd-apply' }" @click="applyUpdates">Установить</button>
+      <button type="button" class="primary" :disabled="busyActive" :class="{ 'is-busy': busyButton === BUSY_RESTART }" @click="applyUpdates">Установить</button>
     </div>
   </section>
 </template>

@@ -3,6 +3,20 @@ export type ApiOptions = RequestInit & {
   timeoutMs?: number
 }
 
+/** Ошибка API с HTTP-статусом и стабильным code (RM0a). */
+export class ApiError extends Error {
+  status?: number
+  code?: string
+  detail?: string
+  constructor(message: string, opts: { status?: number; code?: string; detail?: string } = {}) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = opts.status
+    this.code = opts.code
+    this.detail = opts.detail
+  }
+}
+
 const DEFAULT_TIMEOUT_MS = 120_000
 
 /** Обработчик 401; регистрируется из main.ts, чтобы не замыкать цикл client↔stores. */
@@ -59,19 +73,30 @@ export async function api<T = Record<string, unknown>>(path: string, options: Ap
         if (!isLoginPath(path)) {
           notifyUnauthorized()
         }
-        const err = new Error(String(data.error || 'Требуется авторизация')) as Error & { status?: number }
-        err.status = 401
-        throw err
+        throw new ApiError(String(data.error || 'Требуется авторизация'), {
+          status: 401,
+          code: typeof data.code === 'string' ? data.code : 'unauthorized',
+          detail: typeof data.detail === 'string' ? data.detail : undefined,
+        })
       }
-      const detail = typeof data.detail === 'string' && data.detail ? `: ${data.detail}` : ''
-      throw new Error(String(data.error || `HTTP ${response.status}`) + detail)
+      const detail = typeof data.detail === 'string' && data.detail ? data.detail : undefined
+      const msg = String(data.error || `HTTP ${response.status}`) + (detail ? `: ${detail}` : '')
+      throw new ApiError(msg, {
+        status: response.status,
+        code: typeof data.code === 'string' ? data.code : undefined,
+        detail,
+      })
     }
     // Часть CGI отдаёт 200 с ok:false / error — не считаем это успехом.
     if (data && typeof data === 'object' && 'ok' in data && data.ok === false) {
-      throw new Error(String(data.error || 'Операция не выполнена'))
+      throw new ApiError(String(data.error || 'Операция не выполнена'), {
+        status: response.status,
+        code: typeof data.code === 'string' ? data.code : undefined,
+        detail: typeof data.detail === 'string' ? data.detail : undefined,
+      })
     }
     if (isBareErrorPayload(data)) {
-      throw new Error(String(data.error))
+      throw new ApiError(String(data.error))
     }
     return data as T
   } catch (e) {

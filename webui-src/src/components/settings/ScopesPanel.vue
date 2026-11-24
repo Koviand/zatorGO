@@ -38,6 +38,19 @@ async function saveScope() {
     showToast((e as Error).message, 'error')
   }
 }
+
+async function applyPreset(preset: string) {
+  try {
+    await withBusy('scope-preset', async () => {
+      announceRestart()
+      const res = await applySetting.scope_preset(preset, preset !== 'all')
+      await fetchAndApplyState()
+      showToast(res.hint || `Пресет ${preset} применён.${res.scope ? ' Scope ' + res.scope : ''}`)
+    })
+  } catch (e) {
+    showToast((e as Error).message, 'error')
+  }
+}
 </script>
 
 <template>
@@ -52,6 +65,9 @@ async function saveScope() {
     </div>
     <div class="actions" style="margin-top:0.8rem">
       <button type="button" class="primary" :disabled="busyActive" :class="{ 'is-busy': busyButton === 'scope' }" @click="saveScope">Сохранить scopes</button>
+      <button type="button" :disabled="busyActive" @click="applyPreset('all')">Все устройства</button>
+      <button type="button" :disabled="busyActive" @click="applyPreset('tv')">TV (mark:1)</button>
+      <button type="button" :disabled="busyActive" @click="applyPreset('guest')">Гостевая (mark:2)</button>
     </div>
   </section>
 </template>

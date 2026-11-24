@@ -16,6 +16,8 @@ const route = useRoute()
 const router = useRouter()
 const input = ref('')
 const bulk = ref('')
+const explainInput = ref('')
+const explainResult = ref('')
 const strategyDraft = ref<Record<string, string>>({})
 
 const labels: Record<DomainListName, string> = {
@@ -134,6 +136,42 @@ async function importList() {
   }
 }
 
+async function refreshCheckGv() {
+  try {
+    await withBusy('gv-refresh-check', async () => {
+      const res = await domains.refresh_check() as { check_ok?: boolean; hosts_added?: number; ipv4_count?: number }
+      await refreshDomainList('googlevideo')
+      showToast(`GV: hosts +${res.hosts_added || 0}, ipv4 ${res.ipv4_count ?? '—'}, check ${res.check_ok ? 'ok' : 'fail'}`,
+        res.check_ok ? undefined : 'warning')
+    })
+  } catch (e) {
+    showToast((e as Error).message, 'error')
+  }
+}
+
+async function explainDomain() {
+  const d = explainInput.value.trim()
+  if (!d) return
+  try {
+    await withBusy('domain-explain', async () => {
+      const res = await domains.explain(d)
+      if (!res.matched) {
+        explainResult.value = `${res.domain}: не в обходе` +
+          (res.hostlist_mode ? ` (режим: ${res.hostlist_mode})` : '')
+      } else {
+        explainResult.value = `${res.domain}: ${(res.matches || []).map((m) => {
+          const role = m.role ? `:${m.role}` : ''
+          const note = m.note ? ` (${m.note})` : ''
+          return `${m.list}/${m.match}${role}${note}`
+        }).join(', ')}`
+      }
+      if (res.custom_rkn_hint) showToast(res.custom_rkn_hint, 'warning')
+    })
+  } catch (e) {
+    showToast((e as Error).message, 'error')
+  }
+}
+
 async function refreshLists() {
   try {
     await withBusy('domains-refresh', async () => {
@@ -245,6 +283,17 @@ async function checkDomain(domain: string) {
         <h2>{{ list?.title || labels[active] }}</h2>
         <span class="chip">{{ list?.items?.length ?? 0 }}</span>
       </div>
+      <div v-if="isGooglevideo && list?.quality" class="panel-d" style="margin-bottom:0.65rem">
+        <strong>YouTube media CDN</strong> ·
+        seed {{ list.quality.seed_state || '—' }} ·
+        auto_locks {{ list.quality.auto_locks_count ?? 0 }} ·
+        ipv4 {{ list.quality.ipv4_count ?? 0 }}{{ list.quality.ipv4_fresh ? ' (fresh)' : '' }} ·
+        wssize {{ list.quality.wssize ? 'on' : 'off' }} ·
+        hosts {{ list.quality.hosts_count ?? 0 }}
+        <div class="actions" style="margin-top:0.45rem">
+          <button type="button" :disabled="busyActive" @click="refreshCheckGv">Обновить + проверить</button>
+        </div>
+      </div>
       <p v-if="isGooglevideo" class="panel-d">
         Автопробой TLS/CDN + обучение на трафике:
         <code>^rr\d+---sn-[a-z0-9-]+\.googlevideo\.com$</code>
@@ -285,6 +334,15 @@ async function checkDomain(domain: string) {
             :class="{ 'is-busy': busyButton === 'domain-import' }"
             @click="importList">Импортировать</button>
         </div>
+      </div>
+
+      <div class="field" style="margin-top:0.9rem">
+        <span>Проверить домен (explain)</span>
+        <div class="row">
+          <input v-model="explainInput" placeholder="example.com" :disabled="busyActive" style="flex:1;min-width:12rem">
+          <button type="button" :disabled="busyActive" @click="explainDomain">Почему в обходе?</button>
+        </div>
+        <p v-if="explainResult" class="panel-d">{{ explainResult }}</p>
       </div>
     </div>
 

@@ -493,6 +493,15 @@ textarea { resize: vertical; min-height: 10rem; }
   color: var(--ink);
 }
 .warn-list strong { font-size: 0.72rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--warn); }
+.broken-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+  margin-top: 0.35rem;
+}
+.broken-row button { flex: 0 0 auto; }
 .console-cta {
   display: flex;
   flex-wrap: wrap;

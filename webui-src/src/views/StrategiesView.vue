@@ -2,9 +2,10 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { applySetting, clearLock, setLock, profileCheck } from '../api/endpoints'
+import type { ApplyResult } from '../api/types'
 import type { ProfileInfo } from '../api/types'
 import { gatedReason, isProfileGated } from '../gating'
-import { busyActive, busyButton, withBusy } from '../stores/busy'
+import { BUSY_RESTART, busyActive, busyButton, withBusy, withBusyRestart } from '../stores/busy'
 import { fetchAndApplyState } from '../stores/state'
 import { locks, refreshAll, scope, scopes, statusLoaded, strategyChecks } from '../stores/status'
 import { refreshTlsBlobSettings, tlsBlobSettings } from '../stores/settings'
@@ -120,6 +121,19 @@ function markOverrideDirty(profile: string) {
 
 function canOverride(p: ProfileInfo) {
   return OVERRIDE_PROFILES.has(String(p.profile))
+}
+
+const ORIGIN_LABELS: Record<string, string> = {
+  recommendations: 'рекомендации',
+  auto_relock: 'auto-relock',
+  manual: 'вручную',
+  fix_discord: 'Discord',
+  supersweep: 'суперсвип',
+}
+
+function originLabel(origin?: string): string {
+  if (!origin) return ''
+  return ORIGIN_LABELS[origin] || origin
 }
 
 function gated(p: ProfileInfo) {
@@ -243,6 +257,75 @@ async function check(profile: string, p: ProfileInfo) {
   }
 }
 
+async function fixDiscord() {
+  try {
+    await withBusy('fix-discord', async () => {
+      const res = await applySetting.fix_discord()
+      await refreshAll()
+      const label = res.result === 'ok' ? 'ok' : res.result === 'partial' ? 'частично' : 'fail'
+      const udpLabel =
+        res.udp === 'configured' ? 'настроен (без verify)' :
+        res.udp === 'skipped' ? 'пропущен' :
+        res.udp
+      showToast(
+        `Discord: ${label} (TCP ${res.tcp}, UDP ${udpLabel})`,
+        res.result === 'ok' ? undefined : 'warning',
+      )
+      if (res.warning) showToast(res.warning, 'warning')
+    })
+  } catch (e) {
+    showToast((e as Error).message, 'error')
+  }
+}
+
+async function sweepBroken() {
+  try {
+    await withBusy('sweep-broken', async () => {
+      const res = await applySetting.sweep_broken()
+      if (res.started) showToast(`Суперсвип сломанных: ${(res.workers || []).join(', ') || 'старт'}`)
+      else showToast((res as ApplyResult & { message?: string }).message || 'Нет сломанных профилей')
+    })
+  } catch (e) {
+    showToast((e as Error).message, 'error')
+  }
+}
+
+async function updateStrategiesFeed() {
+  try {
+    await withBusyRestart(async () => {
+      const res = await applySetting.strategies_feed()
+      await refreshAll()
+      const reg = res.registered ?? 0
+      const skip = res.skipped ?? 0
+      const tag = res.tag ? ` ${res.tag}` : ''
+      showToast(
+        `Каталог стратегий${tag}: новых ${reg}, без изменений ${skip}.${restartSuffix(res)}`,
+        reg > 0 ? undefined : 'info',
+      )
+      if (res.warning) showToast(res.warning, 'warning')
+    })
+  } catch (e) {
+    showToast((e as Error).message, 'error')
+  }
+}
+
+async function applyRecs(profile: string) {
+  try {
+    await withBusy(`recs-${profile}`, async () => {
+      const res = await applySetting.recommendations_apply(Number(profile), 3)
+      await refreshAll()
+      if (res.ok && res.strategy) {
+        draft.value[profile] = String(res.strategy)
+        showToast(`Профиль ${profile}: рекомендация ${res.strategy}`)
+      } else {
+        showToast((res as { error?: string }).error || 'Рекомендация не прошла verify', 'warning')
+      }
+    })
+  } catch (e) {
+    showToast((e as Error).message, 'error')
+  }
+}
+
 async function saveFake(profile: string) {
   try {
     await withBusy(`fake-${profile}`, async () => {
@@ -298,6 +381,9 @@ async function saveCloneSize(profile: string) {
           </select>
         </label>
         <button type="button" :disabled="busyActive" :class="{ 'is-busy': busyButton === 'refresh-locks' }" @click="refresh">Обновить</button>
+        <button type="button" :disabled="busyActive" :class="{ 'is-busy': busyButton === BUSY_RESTART }" @click="updateStrategiesFeed">Каталог стратегий</button>
+        <button type="button" :disabled="busyActive" @click="fixDiscord">Починить Discord</button>
+        <button type="button" :disabled="busyActive" @click="sweepBroken">Сломанные</button>
         <router-link class="ghost btn-link" to="/manual#supersweep-panel">Суперсвип</router-link>
       </div>
     </div>
@@ -311,7 +397,10 @@ async function saveCloneSize(profile: string) {
         <div class="strategy-head">
           <h3>{{ p.profile }}. {{ p.label }}</h3>
           <div class="meta">
-            lock {{ p.current_lock || 'auto' }} · max {{ p.max_strategy ?? '—' }}
+            lock {{ p.current_lock || 'auto' }}
+            <template v-if="p.lock_origin"> · origin {{ originLabel(p.lock_origin) }}</template>
+            <template v-if="p.lock_source && p.lock_source !== 'auto'"> · src {{ p.lock_source }}</template>
+            · max {{ p.max_strategy ?? '—' }}
             <template v-if="p.is_fallback"> · fb {{ p.fallback_enabled ? 'on' : 'off' }}</template>
             <template v-if="p.is_udp_games"> · games {{ p.udp_games_enabled ? 'on' : 'off' }}</template>
             <template v-if="p.is_dns_desync"> · dns {{ p.dns_desync_enabled ? 'on' : 'off' }}</template>
@@ -334,6 +423,12 @@ async function saveCloneSize(profile: string) {
           <button type="button" class="ghost" :disabled="busyActive || gated(p)"
             :class="{ 'is-busy': busyButton === `check-${p.profile}` }"
             @click="check(String(p.profile), p)">Check</button>
+          <button
+            v-if="Number(p.profile) >= 1 && Number(p.profile) <= 4"
+            type="button" class="ghost" :disabled="busyActive || gated(p)"
+            :class="{ 'is-busy': busyButton === `recs-${p.profile}` }"
+            @click="applyRecs(String(p.profile))"
+          >Топ рек.</button>
         </div>
         <p v-if="draftDirty(p)" class="panel-d" style="color:var(--warn);margin:0">
           Черновик {{ draftText(String(p.profile)) }} ≠ {{ p.current_lock || 'auto' }}

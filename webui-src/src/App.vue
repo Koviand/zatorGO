@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { api, formBody } from './api/client'
-import { logout as apiLogout, serviceAction } from './api/endpoints'
+import { login as apiLogin, logout as apiLogout, serviceAction } from './api/endpoints'
 import { clearLoginGate, forceLogin, needLogin } from './stores/auth'
 import { busyActive, busyButton, withBusy } from './stores/busy'
 import { fetchAndApplyState } from './stores/state'
@@ -120,7 +119,7 @@ async function submitLogin() {
   loginError.value = ''
   loginBusy.value = true
   try {
-    await api('/api/login', formBody({ password: loginPass.value }))
+    await apiLogin(loginPass.value)
     loginPass.value = ''
     clearLoginGate()
     statusLoaded.value = false

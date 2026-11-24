@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
-import { runCheck, serviceAction } from '../api/endpoints'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import type { ProfileInfo } from '../api/types'
+import { fetchEvents, fetchStrategyJournal, repairProfile, runCheck, serviceAction } from '../api/endpoints'
 import CheckResults from '../components/ui/CheckResults.vue'
 import { busyActive, busyButton, withBusy } from '../stores/busy'
 import { confirmDialog } from '../stores/confirm'
@@ -14,6 +15,14 @@ import {
   versionInfo,
 } from '../stores/status'
 import { showToast } from '../stores/toast'
+
+type JournalEntry = { ts?: string; profile?: number; strategy?: number; result?: string; source?: string }
+const journalEnabled = ref(false)
+const journalEntries = ref<JournalEntry[]>([])
+const repairNote = ref('')
+let mounted = false
+let eventsAbort: AbortController | null = null
+let eventsSeq = 0
 
 const running = computed(() => Boolean(status.value?.zapret2_running))
 const health = computed(() => status.value?.health)
@@ -38,17 +47,73 @@ const watchdog = computed(() => {
 const fwEnsure = computed(() => health.value?.fw_ensure || '—')
 const ver = computed(() => versionInfo.value?.zator_version || '—')
 
+/** Профили для блока «Что сломалось»: degraded + validator degraded. */
+const brokenProfiles = computed(() => {
+  const profiles = status.value?.profiles || []
+  const deg = new Set(health.value?.degraded_profiles || [])
+  const byId = new Map<number, ProfileInfo>()
+  for (const p of profiles) {
+    const id = Number(p.profile)
+    if (!Number.isFinite(id)) continue
+    byId.set(id, p)
+  }
+  const ids = deg.size
+    ? [...deg]
+    : (health.value?.validator === 'degraded' || overall.value === 'degraded')
+      ? profiles.map((p) => Number(p.profile)).filter((n) => Number.isFinite(n))
+      : []
+  return ids.map((id) => {
+    const p = byId.get(id)
+    return {
+      id,
+      label: p?.label || `Профиль ${id}`,
+      lock: p?.current_lock || '—',
+      origin: p?.lock_origin || '—',
+      source: p?.lock_source || '—',
+    }
+  })
+})
+const showBroken = computed(() =>
+  brokenProfiles.value.length > 0
+  || overall.value === 'degraded'
+  || health.value?.validator === 'degraded'
+  || Boolean(health.value?.warning),
+)
+
 function yn(v: boolean | undefined) {
   if (v === true) return 'да'
   if (v === false) return 'нет'
   return '—'
 }
 
+async function loadJournal() {
+  try {
+    const j = await fetchStrategyJournal()
+    journalEnabled.value = !!j.enabled
+    journalEntries.value = j.entries || []
+  } catch {
+    journalEnabled.value = false
+    journalEntries.value = []
+  }
+}
+
 async function refresh() {
   try {
-    await withBusy('refresh-status', async () => { await refreshAll() })
+    await withBusy('refresh-status', async () => {
+      await refreshAll()
+      await loadJournal()
+    })
   } catch (e) {
     showToast((e as Error).message, 'error')
+  }
+}
+
+function fmtTs(ts?: string) {
+  if (!ts) return '—'
+  try {
+    return new Date(ts).toLocaleString()
+  } catch {
+    return ts
   }
 }
 
@@ -61,6 +126,63 @@ async function check() {
     showToast('Проверка TLS завершена')
   } catch (e) {
     showToast((e as Error).message, 'error')
+  }
+}
+
+async function repair(profile: number) {
+  const ok = await confirmDialog({
+    title: `Починить профиль ${profile}?`,
+    message: 'Узкий ремонт: auto-relock или рекомендации для этого профиля. Полный суперсвип не запускается.',
+    confirmText: 'Починить',
+  })
+  if (!ok) return
+  try {
+    await withBusy(`repair-${profile}`, async () => {
+      const res = await repairProfile({ profile, mode: 'auto', scope: scope.value || 'default' })
+      repairNote.value = `p${profile}: mode=${res.mode || 'auto'}${res.async ? ' (async)' : ''}`
+      showToast(`Ремонт профиля ${profile} запущен (${res.mode || 'auto'})`)
+      await refreshAll()
+      await loadJournal()
+    })
+  } catch (e) {
+    showToast((e as Error).message, 'error')
+    repairNote.value = `p${profile}: fail — ${(e as Error).message}`
+  }
+}
+
+async function listenRepairEvents() {
+  while (mounted) {
+    if (document.hidden) {
+      await new Promise((r) => setTimeout(r, 1000))
+      continue
+    }
+    const ac = new AbortController()
+    eventsAbort = ac
+    try {
+      const res = await fetchEvents({
+        after: eventsSeq,
+        timeout: 25,
+        type: 'repair',
+        signal: ac.signal,
+      })
+      if (typeof res.seq === 'number') eventsSeq = res.seq
+      for (const ev of res.events || []) {
+        const msg = ev.message || ev.state || 'repair'
+        repairNote.value = `p${ev.profile ?? '?'}: ${msg}`
+        if (ev.state === 'done' || ev.state === 'fail') {
+          showToast(
+            ev.state === 'done'
+              ? `Ремонт профиля ${ev.profile ?? ''} завершён`
+              : `Ремонт не удался: ${msg}`,
+            ev.state === 'done' ? undefined : 'error',
+          )
+          void refreshAll().then(loadJournal)
+        }
+      }
+    } catch {
+      if (!mounted || ac.signal.aborted) return
+      await new Promise((r) => setTimeout(r, 2000))
+    }
   }
 }
 
@@ -86,7 +208,14 @@ async function svc(action: 'start' | 'stop' | 'restart') {
 }
 
 onMounted(() => {
+  mounted = true
   if (!statusLoaded.value) void refresh()
+  else void loadJournal()
+  void listenRepairEvents()
+})
+onUnmounted(() => {
+  mounted = false
+  eventsAbort?.abort()
 })
 </script>
 
@@ -141,11 +270,59 @@ onMounted(() => {
             <span class="k">Post-update</span>
             <span class="v mono">{{ health?.post_update_verify || status?.post_update_verify || '—' }}</span>
           </div>
+          <div class="health-cell">
+            <span class="k">Auto-relock</span>
+            <span class="v" :class="health?.auto_relock ? 'ok' : ''">{{ yn(health?.auto_relock) }}</span>
+          </div>
+          <div class="health-cell">
+            <span class="k">Validator</span>
+            <span
+              class="v mono"
+              :class="{
+                ok: health?.validator === 'ok',
+                bad: health?.validator === 'degraded',
+              }"
+            >{{ health?.validator || '—' }}</span>
+          </div>
+        </div>
+
+        <div v-if="showBroken" class="warn-list broken-panel">
+          <strong>Что сломалось</strong>
+          <div class="panel-d" style="margin:0.25rem 0 0.5rem">
+            Validator: <span class="mono">{{ health?.validator || '—' }}</span>
+            · health: <span class="mono">{{ overall }}</span>
+            <template v-if="health?.warning"> · {{ health.warning }}</template>
+          </div>
+          <div v-if="!brokenProfiles.length" class="panel-d">Деградировавших профилей в health нет — проверьте TLS или журнал.</div>
+          <div v-for="row in brokenProfiles" :key="row.id" class="broken-row">
+            <div class="mono">
+              p{{ row.id }} · {{ row.label }}
+              · lock {{ row.lock }}
+              · origin {{ row.origin }}
+              · source {{ row.source }}
+            </div>
+            <button
+              type="button"
+              class="primary"
+              :disabled="busyActive"
+              :class="{ 'is-busy': busyButton === `repair-${row.id}` }"
+              @click="repair(row.id)"
+            >Починить</button>
+          </div>
+          <div v-if="repairNote" class="mono" style="opacity:0.85;margin-top:0.35rem">{{ repairNote }}</div>
         </div>
 
         <div v-if="warnings.length" class="warn-list">
           <strong>Предупреждения службы</strong>
           <div v-for="(w, i) in warnings" :key="i">{{ w }}</div>
+        </div>
+
+        <div v-if="journalEnabled" class="warn-list" style="margin-top:0.75rem">
+          <strong>Журнал стратегий</strong>
+          <div v-if="!journalEntries.length" class="panel-d">Пока пусто</div>
+          <div v-for="(e, i) in journalEntries.slice().reverse().slice(0, 12)" :key="i" class="mono" style="opacity:0.9">
+            {{ fmtTs(e.ts) }} · p{{ e.profile }} s{{ e.strategy }} · {{ e.result }} · {{ e.source || '—' }}
+          </div>
         </div>
 
         <div class="console-cta">

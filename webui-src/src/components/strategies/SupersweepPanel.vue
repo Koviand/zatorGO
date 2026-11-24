@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { fetchSupersweep, supersweepCancel, supersweepStart } from '../../api/endpoints'
+import { fetchEvents, fetchSupersweep, supersweepCancel, supersweepStart } from '../../api/endpoints'
 import type { SupersweepPayload } from '../../api/types'
 import { busyActive, busyButton, withBusy } from '../../stores/busy'
 import { confirmDialog } from '../../stores/confirm'
@@ -39,6 +39,8 @@ const scopeOptions = computed(() => {
 let mounted = false
 let timer: number | undefined
 let controller: AbortController | null = null
+let eventsAbort: AbortController | null = null
+let eventsSeq = 0
 let wasActive = false
 
 watch(() => props.scope, (v) => {
@@ -103,6 +105,34 @@ function visibilityChanged() {
   if (!document.hidden) void refresh()
 }
 
+/** Long-poll /api/events — будит refresh при supersweep; poll остаётся fallback. */
+async function listenEvents() {
+  while (mounted) {
+    if (document.hidden) {
+      await new Promise((r) => setTimeout(r, 1000))
+      continue
+    }
+    const ac = new AbortController()
+    eventsAbort = ac
+    try {
+      const res = await fetchEvents({
+        after: eventsSeq,
+        timeout: 25,
+        type: 'supersweep',
+        signal: ac.signal,
+      })
+      if (typeof res.seq === 'number') eventsSeq = res.seq
+      if (res.events?.length && mounted && !document.hidden) {
+        stopTimer()
+        void refresh()
+      }
+    } catch {
+      if (!mounted || ac.signal.aborted) return
+      await new Promise((r) => setTimeout(r, 2000))
+    }
+  }
+}
+
 async function startRun() {
   const ok = await confirmDialog({
     title: 'Запустить суперсвип?',
@@ -150,11 +180,13 @@ onMounted(() => {
   mounted = true
   document.addEventListener('visibilitychange', visibilityChanged)
   void refresh()
+  void listenEvents()
 })
 onUnmounted(() => {
   mounted = false
   stopTimer()
   controller?.abort()
+  eventsAbort?.abort()
   document.removeEventListener('visibilitychange', visibilityChanged)
 })
 

@@ -15,6 +15,10 @@ export interface ProfileInfo {
   description?: string
   current_lock?: string
   max_strategy?: number
+  /** orchestra: scoped | default | auto | conflict */
+  lock_source?: string
+  /** apply-источник: recommendations | auto_relock | manual | fix_discord | supersweep */
+  lock_origin?: string
   is_fallback?: boolean
   fallback_enabled?: boolean
   is_udp_games?: boolean
@@ -34,6 +38,12 @@ export interface HealthPayload {
   args_present?: boolean
   post_update_verify?: string
   service_warnings?: number
+  auto_relock?: boolean
+  auto_relock_fails?: number
+  degraded_profiles?: number[]
+  busy_profile?: number
+  warning?: string
+  validator?: string
 }
 
 export interface StatusPayload {
@@ -100,6 +110,50 @@ export interface CheckPayload {
   waited_apply?: boolean
   applied?: boolean
   retried?: boolean
+}
+
+/** Batch /api/check?profiles=1,2 (RM0c). */
+export interface BatchCheckPayload {
+  ok?: boolean
+  checks?: CheckPayload[]
+}
+
+export interface CapabilitiesPayload {
+  ok?: boolean
+  version?: string
+  goos?: string
+  goarch?: string
+  auth_required?: boolean
+  features?: Record<string, boolean | number | string>
+  endpoints?: string[]
+}
+
+export interface ApiEvent {
+  type: string
+  state?: string
+  profile?: number
+  message?: string
+  ts?: number
+}
+
+export interface EventsPayload {
+  ok?: boolean
+  mode?: 'long-poll' | string
+  after?: number
+  seq?: number
+  events?: ApiEvent[]
+}
+
+export interface RepairResult {
+  ok?: boolean
+  started?: boolean
+  mode?: string
+  previous_lock?: string
+  scope?: string
+  profile?: number
+  async?: boolean
+  worker?: string
+  [key: string]: unknown
 }
 
 export interface LockResult {
@@ -276,6 +330,14 @@ export interface DomainsListPayload {
   /** Per-SNI (sn-*) auto-locks for profile 2 */
   auto_locks?: GooglevideoAutoLock[]
   seed?: GooglevideoSeedStatus
+  quality?: {
+    seed_state?: string
+    auto_locks_count?: number
+    ipv4_count?: number
+    ipv4_fresh?: boolean
+    wssize?: boolean
+    hosts_count?: number
+  }
 }
 
 export interface ApplyResult {
@@ -375,4 +437,10 @@ export interface StatePayload {
   client_scope?: ScopesPayload
   nfqws2_errors?: { available?: boolean; content?: string; path?: string; lines?: number }
   backups: BackupsPayload
+  /** RM0c: при ?include=capabilities|journal|health */
+  capabilities?: CapabilitiesPayload
+  journal?: {
+    enabled?: boolean
+    entries?: { ts?: string; profile?: number; strategy?: number; result?: string; source?: string }[]
+  }
 }

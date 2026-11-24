@@ -1,19 +1,77 @@
 import { api, downloadBlob, formBody } from './client'
 import type {
-  ApplyResult, BackupsPayload, CheckPayload, DomainsImportResult, DomainsListPayload,
-  FallbackSettings, IfacesSettings, LockResult, ModeSettingData, OkResult, PortInfo, PortsSettings, ProfileInfo, ProviderSettings,
-  ScopesPayload, StatePayload, StatusPayload, TlsBlobSettings, UdpGamesSettings, UpdateCheckResult,
-  WgBlobSettings, WgStateSettings, Recommendations, SupersweepPayload, WssizeRampSettings,
+  ApplyResult, BackupsPayload, BatchCheckPayload, CapabilitiesPayload, CheckPayload,
+  DomainsImportResult, DomainsListPayload, EventsPayload, FallbackSettings, IfacesSettings,
+  LockResult, ModeSettingData, OkResult, PortInfo, PortsSettings, ProfileInfo, ProviderSettings,
+  RepairResult, ScopesPayload, StatePayload, StatusPayload, TlsBlobSettings, UdpGamesSettings,
+  UpdateCheckResult, WgBlobSettings, WgStateSettings, Recommendations, SupersweepPayload, WssizeRampSettings,
 } from './types'
+
+export const login = (password: string) =>
+  api<{ ok?: boolean }>('/api/login', formBody({ password }))
 
 export const fetchStatus = (scope: string) =>
   api<StatusPayload>(`/api/status?scope=${encodeURIComponent(scope)}`)
 
-export const fetchState = (scope: string) =>
-  api<StatePayload>(`/api/state?scope=${encodeURIComponent(scope)}`)
+export const fetchState = (scope: string, include?: string[]) => {
+  const q = new URLSearchParams({ scope })
+  if (include?.length) q.set('include', include.join(','))
+  return api<StatePayload>(`/api/state?${q}`)
+}
+
+export const fetchCapabilities = () =>
+  api<CapabilitiesPayload>('/api/capabilities')
+
+export const fetchEvents = (opts: {
+  after?: number
+  timeout?: number
+  type?: string
+  signal?: AbortSignal
+} = {}) => {
+  const q = new URLSearchParams()
+  if (opts.after != null) q.set('after', String(opts.after))
+  if (opts.timeout != null) q.set('timeout', String(opts.timeout))
+  if (opts.type) q.set('type', opts.type)
+  const qs = q.toString()
+  // long-poll: таймаут клиента чуть больше серверного wait
+  const serverWait = (opts.timeout ?? 25) * 1000
+  return api<EventsPayload>(`/api/events${qs ? `?${qs}` : ''}`, {
+    signal: opts.signal,
+    timeoutMs: Math.max(serverWait + 5000, 30_000),
+  })
+}
+
+export const repairProfile = (opts: {
+  profile: number | string
+  mode?: 'auto' | 'relock' | 'recommendations' | 'sweep'
+  scope?: string
+  top_k?: number
+}) =>
+  api<RepairResult>('/api/repair', formBody({
+    profile: opts.profile,
+    mode: opts.mode || 'auto',
+    scope: opts.scope || 'default',
+    top_k: opts.top_k != null ? opts.top_k : undefined,
+  }))
 
 export const fetchRecommendations = (signal?: AbortSignal) =>
   api<Recommendations>('/api/settings?setting=recommendations', { signal })
+
+export const fetchBypassFlags = (signal?: AbortSignal) =>
+  api<{
+    auto_relock?: boolean
+    auto_relock_fails?: number
+    sweep_on_provider_change?: boolean
+    sweep_schedule_hours?: number
+    blob_fallback?: boolean
+    journal_enabled?: boolean
+  }>('/api/settings?setting=bypass_flags', { signal })
+
+export const fetchStrategyJournal = (signal?: AbortSignal) =>
+  api<{
+    enabled?: boolean
+    entries?: { ts?: string; profile?: number; strategy?: number; result?: string; source?: string }[]
+  }>('/api/settings?setting=strategy_journal', { signal })
 
 export const fetchSupersweep = (signal?: AbortSignal) =>
   api<SupersweepPayload>('/api/settings?setting=supersweep', { signal })
@@ -62,6 +120,11 @@ export const profileCheck = (
       wait_apply: opts.waitApply ? '1' : undefined,
       expect_lock: opts.expectLock || undefined,
     }))
+
+/** Batch check: profiles=1,2,4 → {ok, checks:[...]} (RM0c). */
+export const batchCheck = (profiles: Array<number | string>, scope = 'default') =>
+  api<BatchCheckPayload>('/api/check',
+    formBody({ profiles: profiles.join(','), scope }))
 
 export const fetchTlsBlobSettings = () =>
   api<TlsBlobSettings>('/api/settings')
@@ -194,6 +257,66 @@ export const applySetting = {
       '/api/settings',
       { ...formBody({ setting: 'update_apply' }), timeoutMs: 200_000 },
     ),
+  auto_relock: (enabled: boolean, fails?: number) =>
+    api<ApplyResult & { auto_relock?: boolean; auto_relock_fails?: number }>('/api/settings',
+      formBody({
+        setting: 'auto_relock', value: enabled ? '1' : '0',
+        ...(fails != null ? { fails: String(fails) } : {}),
+      })),
+  journal_enabled: (enabled: boolean) =>
+    api<ApplyResult & { journal_enabled?: boolean; enabled?: boolean }>('/api/settings',
+      formBody({ setting: 'journal_enabled', value: enabled ? '1' : '0' })),
+  sweep_on_provider_change: (enabled: boolean) =>
+    api<ApplyResult & { sweep_on_provider_change?: boolean; enabled?: boolean }>('/api/settings',
+      formBody({ setting: 'sweep_on_provider_change', value: enabled ? '1' : '0' })),
+  sweep_schedule_hours: (hours: number) =>
+    api<ApplyResult & { sweep_schedule_hours?: number; warning?: string }>('/api/settings',
+      formBody({ setting: 'sweep_schedule_hours', value: String(hours) })),
+  blob_fallback: (enabled: boolean) =>
+    api<ApplyResult & { blob_fallback?: boolean; enabled?: boolean }>('/api/settings',
+      formBody({ setting: 'blob_fallback', value: enabled ? '1' : '0' })),
+  recommendations_apply: (profile: number, topK = 1) =>
+    api<ApplyResult & { strategy?: number; rolled_back?: boolean; origin?: string }>('/api/settings',
+      formBody({ setting: 'recommendations_apply', profile: String(profile), top_k: String(topK) })),
+  fix_discord: () =>
+    api<{
+      ok: boolean
+      result: 'ok' | 'partial' | 'fail' | string
+      tcp: 'ok' | 'fail' | string
+      /** configured = стратегия+порты; не TLS-verify голоса */
+      udp: 'configured' | 'fail' | 'skipped' | string
+      udp_verified?: boolean
+      tcp_strategy?: number
+      voice_strategy?: number
+      hostlist_ok?: boolean
+      warning?: string
+    }>('/api/settings', formBody({ setting: 'fix_discord' })),
+  sweep_broken: () =>
+    api<ApplyResult & { started?: boolean; workers?: string[] }>('/api/settings',
+      formBody({ setting: 'sweep_broken' })),
+  strategies_feed: () =>
+    api<ApplyResult & {
+      applied?: number
+      registered?: number
+      skipped?: number
+      tag?: string
+      path?: string
+      warning?: string
+    }>('/api/settings', formBody({ setting: 'strategies_feed', value: 'update' })),
+  scope_preset: (preset: string, copyLocks = false) =>
+    api<ApplyResult & { scope?: string; hint?: string }>('/api/settings',
+      formBody({
+        setting: 'scope_preset', preset,
+        ...(copyLocks ? { copy_locks: '1' } : {}),
+      })),
+  scope_copy_locks: (scope: string, undo = false) =>
+    api<ApplyResult & { copied?: number; cleared?: number; undone?: boolean; scope?: string }>(
+      '/api/settings',
+      formBody({
+        setting: 'scope_copy_locks',
+        scope,
+        ...(undo ? { undo: '1' } : {}),
+      })),
 }
 
 export const fetchDomainsList = (list: string, scope = 'default') =>
@@ -214,6 +337,8 @@ export const domains = {
   clear: (list: string, scope = 'default') => domainsPost({ list, action: 'clear', scope }),
   refresh: (list: string, scope = 'default') =>
     domainsPost({ list, action: 'refresh', scope }),
+  refresh_ips: (list = 'googlevideo', scope = 'default') =>
+    domainsPost({ list, action: 'refresh_ips', scope }),
   check: (domain: string) =>
     api<ApplyResult>('/api/domains',
       formBody({ list: 'custom_rkn', action: 'check', domain })),
@@ -221,6 +346,18 @@ export const domains = {
     domainsPost({ list: 'custom_rkn', action: 'set_strategy', domain, strategy, scope }),
   clear_strategy: (domain: string, scope = 'default') =>
     domainsPost({ list: 'custom_rkn', action: 'clear_strategy', domain, scope }),
+  refresh_check: () =>
+    domainsPost({ list: 'googlevideo', action: 'refresh_check' }),
+  explain: (domain: string) =>
+    api<{
+      ok: boolean
+      matched: boolean
+      matches: { list: string; kind: string; match: string; role?: string; entry?: string; note?: string }[]
+      domain: string
+      hostlist_mode?: string
+      reason?: string
+      custom_rkn_hint?: string
+    }>(`/api/domains?${new URLSearchParams({ action: 'explain', domain })}`),
 }
 
 export const logout = () => api<{ ok: boolean }>('/api/logout', formBody({}))
