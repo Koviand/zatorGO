@@ -37,7 +37,7 @@ chmod +x zator-launcher.sh
 ./zator-launcher.sh -password 'ваш-секрет'
 ```
 
-Лаунчер проверит **Ed25519** `SHA256SUMS.sig`, сверит sha256 бинарника, поставит zapret2 и поднимет Web UI на **`:17682`**.
+Лаунчер сам поставит недостающие пакеты (`curl`/`openssl`/`iptables`/`ipset` через opkg/apt/apk), проверит **Ed25519** `SHA256SUMS.sig`, сверит sha256 бинарника, поставит zapret2 и поднимет Web UI на **`:17682`**. Офлайн: `ZATOR_SKIP_DEPS=1`.
 
 Откройте `http://<IP>:17682/` — вход по паролю **включён по умолчанию**.
 

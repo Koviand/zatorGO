@@ -1,5 +1,5 @@
 #!/bin/sh
-# zator-launcher — минимальный bootstrap: определяет arch, качает бинарник, запускает.
+# zator-launcher — bootstrap: зависимости → arch → бинарник → install.
 set -eu
 
 ZATOR_OWNER="${ZATOR_OWNER:-Koviand}"
@@ -8,10 +8,18 @@ ZATOR_RELEASE="${ZATOR_RELEASE:-latest}"
 ZATOR_ROOT="${ZATOR_ROOT:-/opt/zator}"
 ZATOR_BIN_DIR="${ZATOR_BIN_DIR:-$ZATOR_ROOT/bin}"
 ZATOR_MIRROR="${ZATOR_MIRROR:-}"
+# ZATOR_SKIP_DEPS=1 — не ставить пакеты (офлайн / уже подготовленная система).
 
 umask 022
 
 die() { echo "zator-launcher: $*" >&2; exit 1; }
+
+have_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+require_root() {
+  uid=$(id -u 2>/dev/null || echo 1)
+  [ "$uid" = "0" ] || die "нужен root для установки зависимостей и zator"
+}
 
 # Имена owner/repo/tag — только безопасный набор символов (без injection в URL).
 ok_token() {
@@ -24,6 +32,166 @@ ok_token() {
 ok_token "$ZATOR_OWNER" || die "некорректный ZATOR_OWNER"
 ok_token "$ZATOR_REPO" || die "некорректный ZATOR_REPO"
 ok_token "$ZATOR_RELEASE" || die "некорректный ZATOR_RELEASE"
+
+# Пакетный менеджер: Entware (/opt) предпочтительнее системного opkg на Keenetic.
+detect_pkg_mgr() {
+  if [ -x /opt/bin/opkg ]; then
+    echo entware
+  elif have_cmd opkg; then
+    echo openwrt
+  elif have_cmd apt-get; then
+    echo apt
+  elif have_cmd apk; then
+    echo apk
+  else
+    echo none
+  fi
+}
+
+pkg_install() {
+  pm="$1"
+  shift
+  [ "$#" -gt 0 ] || return 0
+  echo "zator-launcher: установка пакетов ($pm): $*" >&2
+  case "$pm" in
+    entware)
+      /opt/bin/opkg update >/dev/null 2>&1 || true
+      /opt/bin/opkg install "$@" || return 1
+      ;;
+    openwrt)
+      opkg update >/dev/null 2>&1 || true
+      opkg install "$@" || return 1
+      ;;
+    apt)
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -qq || return 1
+      apt-get install -y "$@" || return 1
+      ;;
+    apk)
+      apk add --no-cache "$@" || return 1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# Ставит недостающие bootstrap (curl/openssl/…) и runtime (iptables/ipset) пакеты.
+ensure_deps() {
+  if [ "${ZATOR_SKIP_DEPS:-0}" = "1" ]; then
+    echo "zator-launcher: ZATOR_SKIP_DEPS=1 — пропуск установки пакетов" >&2
+    return 0
+  fi
+
+  echo "zator-launcher: проверка зависимостей..." >&2
+  need_dl=0
+  need_openssl=0
+  need_hash=0
+  need_iptables=0
+  need_ipset=0
+  need_ca=0
+
+  if ! have_cmd curl && ! have_cmd wget; then
+    need_dl=1
+  fi
+  if ! have_cmd openssl; then
+    need_openssl=1
+  fi
+  if ! have_cmd sha256sum && ! have_cmd shasum; then
+    # openssl dgst тоже умеет — но без openssl хеш нечем проверить.
+    if ! have_cmd openssl; then
+      need_hash=1
+    fi
+  fi
+  if ! have_cmd iptables; then
+    need_iptables=1
+  fi
+  if ! have_cmd ipset; then
+    need_ipset=1
+  fi
+  # На Debian/Ubuntu без ca-certificates HTTPS часто ломается.
+  if [ ! -e /etc/ssl/certs/ca-certificates.crt ] && \
+     [ ! -e /etc/ssl/certs/ca-bundle.crt ] && \
+     [ ! -d /etc/ssl/certs ]; then
+    need_ca=1
+  fi
+
+  if [ "$need_dl$need_openssl$need_hash$need_iptables$need_ipset$need_ca" = "000000" ]; then
+    echo "zator-launcher: зависимости уже на месте" >&2
+    return 0
+  fi
+
+  require_root
+  pm=$(detect_pkg_mgr)
+  [ "$pm" != "none" ] || die "нет opkg/apt-get/apk — поставьте curl, openssl, iptables, ipset вручную"
+
+  pkgs=""
+  case "$pm" in
+    apt)
+      [ "$need_dl" = "1" ] && pkgs="$pkgs curl"
+      [ "$need_openssl" = "1" ] && pkgs="$pkgs openssl"
+      [ "$need_hash" = "1" ] && pkgs="$pkgs coreutils"
+      [ "$need_iptables" = "1" ] && pkgs="$pkgs iptables"
+      [ "$need_ipset" = "1" ] && pkgs="$pkgs ipset"
+      # CA вместе с любыми сетевыми пакетами — иначе HTTPS к GitHub падает.
+      if [ -n "$pkgs" ] || [ "$need_ca" = "1" ]; then
+        pkgs="$pkgs ca-certificates"
+      fi
+      ;;
+    apk)
+      [ "$need_dl" = "1" ] && pkgs="$pkgs curl"
+      [ "$need_openssl" = "1" ] && pkgs="$pkgs openssl"
+      [ "$need_iptables" = "1" ] && pkgs="$pkgs iptables"
+      [ "$need_ipset" = "1" ] && pkgs="$pkgs ipset"
+      if [ -n "$pkgs" ] || [ "$need_ca" = "1" ]; then
+        pkgs="$pkgs ca-certificates"
+      fi
+      ;;
+    entware|openwrt)
+      [ "$need_dl" = "1" ] && pkgs="$pkgs curl"
+      # openssl CLI: на OpenWrt/Entware пакет часто openssl-util
+      if [ "$need_openssl" = "1" ] || [ "$need_hash" = "1" ]; then
+        pkgs="$pkgs openssl-util"
+      fi
+      [ "$need_iptables" = "1" ] && pkgs="$pkgs iptables"
+      [ "$need_ipset" = "1" ] && pkgs="$pkgs ipset"
+      if [ -n "$pkgs" ] || [ "$need_ca" = "1" ]; then
+        if [ "$pm" = "entware" ]; then
+          pkgs="$pkgs ca-certificates"
+        else
+          pkgs="$pkgs ca-bundle"
+        fi
+      fi
+      ;;
+  esac
+
+  # shellcheck disable=SC2086
+  set -- $pkgs
+  if [ "$#" -gt 0 ]; then
+    if ! pkg_install "$pm" "$@"; then
+      echo "zator-launcher: предупреждение: пакетный менеджер вернул ошибку — пробуем продолжить" >&2
+    fi
+  fi
+
+  # OpenWrt/Entware: openssl-util мог не встать — fallback на openssl.
+  if ! have_cmd openssl; then
+    case "$pm" in
+      openwrt|entware) pkg_install "$pm" openssl >/dev/null 2>&1 || true ;;
+    esac
+  fi
+
+  # Повторная проверка критичного для самого launcher.
+  if ! have_cmd curl && ! have_cmd wget; then
+    die "после установки пакетов нет curl/wget"
+  fi
+  if ! have_cmd openssl; then
+    die "после установки пакетов нет openssl (нужен для проверки SHA256SUMS.sig)"
+  fi
+  if ! have_cmd sha256sum && ! have_cmd shasum && ! have_cmd openssl; then
+    die "нет sha256sum/shasum/openssl для проверки контрольной суммы"
+  fi
+  echo "zator-launcher: зависимости подготовлены" >&2
+}
 
 detect_arch() {
   m=$(uname -m 2>/dev/null || echo unknown)
@@ -120,6 +288,9 @@ asset_url() {
   fi
 }
 
+# Сначала системные пакеты (curl/openssl/iptables/ipset) — до любого HTTPS.
+ensure_deps
+
 arch=$(detect_arch)
 # Lexra (RLX) — нет отдельного Go-таргета. Upstream linux-lexra = big-endian (EB),
 # поэтому ассет zator = mips softfloat (не mipsel): иначе update/zapret endian mismatch.
@@ -130,6 +301,7 @@ if [ "$arch" = lexra ]; then
 fi
 asset="zator-linux-${asset_arch}"
 install_dir="$ZATOR_BIN_DIR"
+require_root
 mkdir -p "$install_dir"
 tmp="$install_dir/.${asset}.$$"
 sums_tmp="$install_dir/.SHA256SUMS.$$"
