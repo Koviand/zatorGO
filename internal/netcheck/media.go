@@ -17,7 +17,7 @@ const (
 	MediaQUIC      = "quic_hint" // подсказка: смотри UDP/h3
 )
 
-// Пороги Range-проб (как в test_googlevideo.com.md).
+// Пороги Range-проб (как в docs/test_googlevideo.com.md).
 const (
 	MediaRange16K = 16384
 	MediaRange64K = 65536

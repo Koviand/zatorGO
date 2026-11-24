@@ -12,7 +12,7 @@
 
 Лимит попыток входа (пароль `/api/login` и HTTP Basic): после 8 неудач с одного `RemoteAddr` — HTTP **429** на ~5 минут. Заголовок `X-Forwarded-For` не учитывается. Валидная session-cookie / Bearer при блокировке IP продолжают работать.
 
-Один глобальный `session_token`: успешный `/api/login` и `/api/logout` ротируют токен для всех клиентов. Cookie живёт 30 дней, флаг `Secure` не выставляется (типичный HTTP на роутере).
+Один глобальный `session_token`: успешный `/api/login` и `/api/logout` ротируют токен для всех клиентов. Cookie живёт **7 дней**; флаг `Secure` ставится только при TLS или `X-Forwarded-Proto: https` (голый HTTP на роутере — без Secure).
 
 ## CSRF и клиент
 
@@ -142,10 +142,10 @@ Query/form: `list=<name>`, `scope=…`.
 | --- | --- |
 | *(GET)* | список архивов |
 | `create` | создать бэкап |
-| `delete` | удалить (`file=…`) |
-| `restore` | восстановить (`file=…`, `mode=smart\|lists\|full`) |
-| `upload` | загрузить `.tar` (multipart) |
-| `download` | скачать (`file=…`) |
+| `delete` | удалить (`name=…`) |
+| `restore` | восстановить (`name=…`, `mode=smart\|lists\|full`) |
+| `upload` | загрузить `.tar` (multipart; `name=` опционально) |
+| `download` | скачать (`name=…`) |
 
 `mode`: по умолчанию `smart` (списки и локи; живой config zapret2 не затирается целиком). `full` может быть заблокирован после обновления (`block_full_restore`). Ответ restore: `files`, `restarted` / `restart_required`.
 

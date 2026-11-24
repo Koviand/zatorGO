@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: ZatorGO HTTP API
-  version: "0.1"
+  version: "0.1.43"
   description: |
     Ручная схема ключевых payload'ов (RM0d). Канонические пути `/api/*`;
     алиасы `/cgi-bin/<name>.cgi`. Полное описание — docs/API.md.
@@ -224,6 +224,198 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Apply"
+        "400":
+          $ref: "#/components/responses/Error"
+  /api/logout:
+    post:
+      tags: [core]
+      summary: Выход (ротация session)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ok"
+  /api/clear-lock:
+    post:
+      tags: [core]
+      summary: Сброс лока профиля
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [profile]
+              properties:
+                profile: { type: string }
+                scope: { type: string, default: default }
+      responses:
+        "200":
+          description: Clear result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LockResult"
+  /api/service:
+    post:
+      tags: [core]
+      summary: Управление службой zapret2
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action:
+                  type: string
+                  enum: [start, stop, restart]
+      responses:
+        "200":
+          description: Service result
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/domains:
+    get:
+      tags: [core]
+      summary: Списки доменов
+      parameters:
+        - name: action
+          in: query
+          schema:
+            type: string
+            enum: [list, get, refresh_ips]
+        - name: list
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Domains payload
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      tags: [core]
+      summary: Изменение списков доменов
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                action: { type: string }
+                list: { type: string }
+                content: { type: string }
+      responses:
+        "200":
+          description: Apply
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Apply"
+  /api/backups:
+    get:
+      tags: [core]
+      summary: Список / скачивание бэкапов
+      parameters:
+        - name: action
+          in: query
+          schema:
+            type: string
+            enum: [list, download]
+        - name: name
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Backups list или файл
+    post:
+      tags: [core]
+      summary: create / delete / restore / upload
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                action:
+                  type: string
+                  enum: [create, delete, restore, upload]
+                name: { type: string }
+                mode:
+                  type: string
+                  enum: [smart, lists, full]
+      responses:
+        "200":
+          description: Backup op result
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/scopes:
+    get:
+      tags: [core]
+      summary: Client scopes
+      responses:
+        "200":
+          description: Scopes
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      tags: [core]
+      summary: Управление scopes
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                action: { type: string }
+                name: { type: string }
+      responses:
+        "200":
+          description: Scopes result
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /api/blob-upload:
+    post:
+      tags: [core]
+      summary: Загрузка TLS/WG blob (multipart)
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                kind: { type: string }
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: Upload result
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
         "400":
           $ref: "#/components/responses/Error"
 

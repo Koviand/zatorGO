@@ -75,6 +75,8 @@
 ## Волна 3
 
 ### RM8 — Googlevideo mid-stream в UI ☑
+
+Методика Range-проб: [`docs/test_googlevideo.com.md`](docs/test_googlevideo.com.md).
 ### RM9 — Zapret trust docs (sums ≠ Zator Ed25519) ☑
 ### RM13 — Offline-бандл first-class docs ☑
 ### RM14 — Node 22 LTS в Actions ☑

@@ -22,6 +22,8 @@
 
 ## Текущий каркас (что уже есть)
 
+> Код BP1–BP12 закрыт в `main` / `v0.1.43+`. Полевой QA устройств — [`Roadmap.md`](Roadmap.md) RM2 / [`docs/PARITY.md`](docs/PARITY.md).
+
 | Возможность | Где |
 | --- | --- |
 | Профили 1…N + `locked.tsv` / scopes | `internal/orchestra`, `internal/webapi` |
@@ -33,8 +35,8 @@
 | Googlevideo seed + `auto_locked.tsv` | `internal/googlevideo`, `internal/app/gv_seed.go` |
 | Fake / clone / TLS·WG blob | `orchestra` overrides, settings |
 | QUIC443, RST guard, reasm, wssize-ramp | settings toggles + Lua assets |
-| Health Overview (`overall`, watchdog) | `webapi/status.go` → `healthPayload` |
-| Watchdog / strategy-validator | **partial** (`docs/PARITY.md`) |
+| Health Overview (`overall`, watchdog, validator) | `webapi/status.go` → `healthPayload` |
+| Watchdog / strategy-validator | **done** (`health.validator` ok\|degraded\|off; полевой smoke → Roadmap RM2) |
 
 Узкие места сегодня: **адаптация после смены DPI**, **автовосстановление**, **охват сервисов сверх YT/Discord**, **применение рекомендаций без ручного клика по каждой стратегии**.
 

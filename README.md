@@ -46,10 +46,11 @@ chmod +x zator-launcher.sh
 ```sh
 ./zator-launcher.sh -password 'ваш-секрет'
 # эквивалент: zator install -password '…'
+# или: ZATOR_PASSWORD='…' zator install   (−password виден в ps)
 ```
 
-Без TTY пароль **нельзя** ввести интерактивно — нужен `-password`.  
-**Не** используйте `-no-auth` как «удобный дефолт»: Web UI окажется открыт всей сети. Флаг допустим только осознанно и с предупреждением в логе.
+Без TTY пароль **нельзя** ввести интерактивно — нужен `-password` или `ZATOR_PASSWORD`.  
+**Не** используйте `-no-auth` как «удобный дефолт»: нужен явный `-host 127.0.0.1` или `-listen-all`; при запуске без auth — то же для `zator webui`.
 
 Не ставьте через `curl | sh` без просмотра скрипта; сохраните launcher на диск, как выше.
 
@@ -108,14 +109,15 @@ make test
 
 **Стратегии** — строки `--lua-desync=…:strategy=N` в `NFQWS2_OPT`. Лок пишет номер в `locked.tsv`; после фиксации UI показывает TLS 1.2 / 1.3.
 
-HTTP API: [`docs/API.md`](docs/API.md) (`/api/*`; `/cgi-bin/*.cgi` — совместимый алиас). Схема: [`docs/openapi.yaml`](docs/openapi.yaml); curl: [`scripts/api-examples.sh`](scripts/api-examples.sh).
+HTTP API: [`docs/API.md`](docs/API.md) (`/api/*`; `/cgi-bin/*.cgi` — совместимый алиас). Схема: [`docs/openapi.yaml`](docs/openapi.yaml); curl: [`scripts/api-examples.sh`](scripts/api-examples.sh). Методика googlevideo Range: [`docs/test_googlevideo.com.md`](docs/test_googlevideo.com.md).
 
 ---
 
 ## CLI
 
 ```text
-zator install [-port 17682] [-password …] [-no-auth] [-source fork|official]
+zator install [-port 17682] [-password …] [-no-auth -listen-all|-host 127.0.0.1] [-source fork|official]
+zator webui [-port …] [-host …] [-listen-all]
 zator update
 zator uninstall -y [--purge]
 zator auth status|set-password|enable|disable
@@ -148,7 +150,7 @@ zator version
 3. Установка: `ZATOR_BUNDLE_DIR=/path/to/bundle zator install -password '…'`  
    либо `Z2R_OFFLINE=1` при наличии `vendor/` рядом с бинарником.
 
-Офлайн **не** расширяет insecure-режим: для zapret по-прежнему нужна контрольная сумма (или явный AllowInsecure только в отладке). Подпись самого бинарника Zator — через подписанный `SHA256SUMS` при online update; offline bundle доверяет заранее скачанному артефакту.
+Офлайн **не** расширяет insecure-режим: для zapret по-прежнему нужна контрольная сумма (или явный AllowInsecure только в отладке). Offline-бандл обязан содержать `SHA256SUMS` + `SHA256SUMS.sig` (Ed25519); `ApplyBundle` без валидной подписи отклоняется.
 
 ---
 
@@ -172,7 +174,7 @@ cd webui-src && npm ci && npm run build   # → assets/webui/
 ## Безопасность
 
 - Порт **17682** слушает все интерфейсы — на VPS нужен пароль (или firewall / proxy).
-- Не используйте `-no-auth` на машинах из интернета.
+- Не используйте `-no-auth` / `-listen-all` на машинах из интернета.
 - Обновления только с доверенного `ZATOR_OWNER` / `ZATOR_REPO`.
 - Install/update **отклоняют** релиз без валидной подписи `SHA256SUMS.sig`.
 
