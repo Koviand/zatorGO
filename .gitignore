@@ -10,6 +10,10 @@ dist/
 .env
 .DS_Store
 webui-src/node_modules/
+junk
+*.tmp
+*.bak
+*~
 
 # Приватный ключ подписи релизов (только pubkey в репозитории).
 .secrets/
