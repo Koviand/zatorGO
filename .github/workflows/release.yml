@@ -108,7 +108,7 @@ jobs:
           GOMIPS: ${{ matrix.gomips }}
           GOMIPS64: ${{ matrix.gomips64 }}
         run: |
-          # Tag v0.1.43 → version 0.1.43 (как Makefile / файл VERSION).
+          # Tag vX.Y.Z → version X.Y.Z (как Makefile / файл VERSION).
           ref="${GITHUB_REF_NAME:-dev}"
           ver="${ref#v}"
           if [ -f VERSION ]; then

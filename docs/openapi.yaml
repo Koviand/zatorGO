@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: ZatorGO HTTP API
-  version: "0.1.43"
+  version: "0.1.44"
   description: |
     Ручная схема ключевых payload'ов (RM0d). Канонические пути `/api/*`;
     алиасы `/cgi-bin/<name>.cgi`. Полное описание — docs/API.md.
