@@ -1,4 +1,5 @@
 import { ref } from 'vue'
+import { ApiError } from '../api/client'
 import { status } from './status'
 
 export type ToastType = 'success' | 'error' | 'info' | 'warning'
@@ -21,6 +22,25 @@ function priority(t: ToastType): number {
     case 'info': return 1
     default: return 0
   }
+}
+
+/** Сообщение из ApiError / Error; для code=busy — warning-текст. */
+export function formatApiError(e: unknown, fallback = 'Ошибка'): string {
+  if (e instanceof ApiError) {
+    if (e.code === 'busy') {
+      return e.message || 'Сервер занят (supersweep / auto-relock). Повторите позже.'
+    }
+    return e.message || fallback
+  }
+  if (e instanceof Error) return e.message || fallback
+  return fallback
+}
+
+/** Тост для ошибки API: busy → warning, иначе error. */
+export function showApiError(e: unknown, fallback = 'Ошибка') {
+  const msg = formatApiError(e, fallback)
+  const type: ToastType = e instanceof ApiError && e.code === 'busy' ? 'warning' : 'error'
+  showToast(msg, type)
 }
 
 /** Показать тост; error/warning не перекрываются success. */

@@ -34,7 +34,8 @@
 | --- | --- | --- |
 | 401 | `unauthorized` | нет/неверная сессия или пароль |
 | 403 | `csrf` | CSRF (чужой Origin без `X-Zator-Client`) |
-| 409 | `conflict` / `busy` | конфликт состояния / занят supersweep или auto-relock |
+| 409 | `busy` | занят supersweep / auto-relock / repair (повторить позже) |
+| 409 | `conflict` | прочий конфликт состояния (не «занятость» прогона) |
 | 429 | `rate_limit` | rate-limit входа |
 | 400 | `validation` | неверные параметры |
 | 404 | `not_found` | неизвестный эндпоинт |
@@ -209,7 +210,8 @@ GET: `setting=<name>` — чтение. POST: `setting=<name>&value=…` (+ до
 | `setting=recommendations` | `fetchRecommendations` | |
 | `recommendations_apply` | `applySetting.recommendations_apply` | |
 | `auto_relock` / journal / sweep_* / blob_fallback | `applySetting.*` | |
-| `strategies_feed` / `fix_discord` / `sweep_broken` | `applySetting.*` | busy: `BUSY_RESTART` |
+| `strategies_feed` | `applySetting.strategies_feed` | UI busy-slot: `BUSY_RESTART` (ожидание рестарта) |
+| `fix_discord` / `sweep_broken` | `applySetting.*` | HTTP 409 `code=busy`, если supersweep/relock уже идёт |
 | `scope_preset` / `scope_copy_locks` | `applySetting.scope_preset` / `scope_copy_locks` | |
 | `supersweep` | `fetchSupersweep` / `supersweepStart` / `supersweepCancel` | |
 | `strategy_register` | `registerStrategy` | |

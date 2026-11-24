@@ -14,7 +14,7 @@ import {
   statusLoaded,
   versionInfo,
 } from '../stores/status'
-import { showToast } from '../stores/toast'
+import { formatApiError, showApiError, showToast } from '../stores/toast'
 
 type JournalEntry = { ts?: string; profile?: number; strategy?: number; result?: string; source?: string }
 const journalEnabled = ref(false)
@@ -106,7 +106,7 @@ async function refresh() {
       await loadJournal()
     })
   } catch (e) {
-    showToast((e as Error).message, 'error')
+    showApiError(e)
   }
 }
 
@@ -128,7 +128,7 @@ async function check() {
     showToast('Проверка TLS завершена')
     mediaHint.value = 'TLS ok ≠ видео ok: для mid-stream вставьте videoplayback URL профиля 2.'
   } catch (e) {
-    showToast((e as Error).message, 'error')
+    showApiError(e)
   }
 }
 
@@ -149,7 +149,7 @@ async function checkMedia() {
     })
     showToast('Mid-stream проверка профиля 2 завершена')
   } catch (e) {
-    showToast((e as Error).message, 'error')
+    showApiError(e)
   }
 }
 
@@ -169,8 +169,8 @@ async function repair(profile: number) {
       await loadJournal()
     })
   } catch (e) {
-    showToast((e as Error).message, 'error')
-    repairNote.value = `p${profile}: fail — ${(e as Error).message}`
+    showApiError(e)
+    repairNote.value = `p${profile}: fail — ${formatApiError(e)}`
   }
 }
 
@@ -227,7 +227,7 @@ async function svc(action: 'start' | 'stop' | 'restart') {
     const labels = { start: 'запущен', stop: 'остановлен', restart: 'перезапущен' } as const
     showToast(`zapret2 ${labels[action]}`)
   } catch (e) {
-    showToast((e as Error).message, 'error')
+    showApiError(e)
   }
 }
 

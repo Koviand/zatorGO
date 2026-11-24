@@ -88,7 +88,7 @@ func (s *Server) postSweepBroken(r *http.Request, p params) (map[string]any, err
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
 	if s.relockActive || s.sweepRunningLocked() {
-		return nil, errf(http.StatusConflict, "Суперавтопрогон или auto-relock уже выполняется")
+		return nil, errCode(http.StatusConflict, CodeBusy, "Суперавтопрогон или auto-relock уже выполняется")
 	}
 	sw, err := s.sweeperOrDefault()
 	if err != nil {
@@ -102,7 +102,7 @@ func (s *Server) postSweepBroken(r *http.Request, p params) (map[string]any, err
 	}
 	if err := sw.Start(context.Background(), sp); err != nil {
 		if errors.Is(err, sweep.ErrBusy) {
-			return nil, errf(http.StatusConflict, "Суперавтопрогон уже выполняется")
+			return nil, errCode(http.StatusConflict, CodeBusy, "Суперавтопрогон уже выполняется")
 		}
 		return nil, errf(http.StatusInternalServerError, err.Error())
 	}

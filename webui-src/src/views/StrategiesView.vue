@@ -9,7 +9,7 @@ import { BUSY_RESTART, busyActive, busyButton, withBusy, withBusyRestart } from 
 import { fetchAndApplyState } from '../stores/state'
 import { locks, refreshAll, scope, scopes, statusLoaded, strategyChecks } from '../stores/status'
 import { refreshTlsBlobSettings, tlsBlobSettings } from '../stores/settings'
-import { restartSuffix, showToast } from '../stores/toast'
+import { restartSuffix, showApiError, showToast } from '../stores/toast'
 import CheckResults from '../components/ui/CheckResults.vue'
 
 const OVERRIDE_PROFILES = new Set(['1', '2', '3', '4', '8'])
@@ -90,7 +90,7 @@ onMounted(async () => {
   try {
     await refreshAll()
   } catch (e) {
-    showToast((e as Error).message, 'error')
+    showApiError(e)
   }
   if (statusLoaded.value) focusProfilesFromQuery()
 })
@@ -111,7 +111,7 @@ async function changeScope(v: string) {
       syncOverridesFromSettings(true)
     })
   } catch (e) {
-    showToast((e as Error).message, 'error')
+    showApiError(e)
   }
 }
 
@@ -144,7 +144,7 @@ async function refresh() {
   try {
     await withBusy('refresh-locks', fetchAndApplyState)
   } catch (e) {
-    showToast((e as Error).message, 'error')
+    showApiError(e)
   }
 }
 
@@ -205,7 +205,7 @@ async function save(profile: string, p: ProfileInfo) {
     else if (checkPayload?.message) showToast(`Профиль ${profile}: ${changed}. ${checkPayload.message}`, 'info')
     else showToast(`Профиль ${profile}: ${changed}`)
   } catch (e) {
-    showToast((e as Error).message, 'error')
+    showApiError(e)
   }
 }
 
@@ -225,7 +225,7 @@ async function reset(profile: string, p: ProfileInfo) {
     })
     showToast(`Профиль ${profile}: ${prev}→auto`)
   } catch (e) {
-    showToast((e as Error).message, 'error')
+    showApiError(e)
   }
 }
 
@@ -253,7 +253,7 @@ async function check(profile: string, p: ProfileInfo) {
       else if (payload.message) showToast(payload.message, 'info')
     })
   } catch (e) {
-    showToast((e as Error).message, 'error')
+    showApiError(e)
   }
 }
 
@@ -274,7 +274,7 @@ async function fixDiscord() {
       if (res.warning) showToast(res.warning, 'warning')
     })
   } catch (e) {
-    showToast((e as Error).message, 'error')
+    showApiError(e)
   }
 }
 
@@ -286,7 +286,7 @@ async function sweepBroken() {
       else showToast((res as ApplyResult & { message?: string }).message || 'Нет сломанных профилей')
     })
   } catch (e) {
-    showToast((e as Error).message, 'error')
+    showApiError(e)
   }
 }
 
@@ -305,7 +305,7 @@ async function updateStrategiesFeed() {
       if (res.warning) showToast(res.warning, 'warning')
     })
   } catch (e) {
-    showToast((e as Error).message, 'error')
+    showApiError(e)
   }
 }
 
@@ -322,7 +322,7 @@ async function applyRecs(profile: string) {
       }
     })
   } catch (e) {
-    showToast((e as Error).message, 'error')
+    showApiError(e)
   }
 }
 
@@ -335,7 +335,7 @@ async function saveFake(profile: string) {
       await refreshTlsBlobSettings()
     })
   } catch (e) {
-    showToast((e as Error).message, 'error')
+    showApiError(e)
   }
 }
 
@@ -348,7 +348,7 @@ async function saveTlsProfile(profile: string) {
       await refreshTlsBlobSettings()
     })
   } catch (e) {
-    showToast((e as Error).message, 'error')
+    showApiError(e)
   }
 }
 
@@ -361,7 +361,7 @@ async function saveCloneSize(profile: string) {
       await refreshTlsBlobSettings()
     })
   } catch (e) {
-    showToast((e as Error).message, 'error')
+    showApiError(e)
   }
 }
 </script>

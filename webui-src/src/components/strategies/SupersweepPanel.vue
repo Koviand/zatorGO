@@ -6,7 +6,7 @@ import { busyActive, busyButton, withBusy } from '../../stores/busy'
 import { confirmDialog } from '../../stores/confirm'
 import { resetDomains } from '../../stores/domains'
 import { refreshAll } from '../../stores/status'
-import { showToast } from '../../stores/toast'
+import { showApiError, showToast } from '../../stores/toast'
 
 const props = withDefaults(defineProps<{
   scope?: string
@@ -152,7 +152,7 @@ async function startRun() {
       await refresh()
     })
   } catch (e) {
-    showToast((e as Error).message, 'error')
+    showApiError(e)
   }
 }
 
@@ -172,7 +172,7 @@ async function cancelRun() {
       await refreshAll()
     })
   } catch (e) {
-    showToast((e as Error).message, 'error')
+    showApiError(e)
   }
 }
 

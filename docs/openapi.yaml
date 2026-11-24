@@ -189,13 +189,9 @@ paths:
           required: true
           schema:
             type: string
-            enum:
-              - supersweep
-              - bypass_flags
-              - strategy_journal
-              - recommendations
-              - update_check
-              - auto_relock
+            description: >
+              Имя секции (неполный enum): supersweep, bypass_flags, strategy_journal,
+              recommendations, update_check, auto_relock, ports, tls_blob, hostlist, …
       responses:
         "200":
           description: Payload зависит от setting
@@ -207,7 +203,10 @@ paths:
                   - type: object
     post:
       tags: [core]
-      summary: Запись setting
+      summary: Запись setting / action
+      description: >
+        Мутации через setting=… (toggles, recommendations_apply, fix_discord,
+        strategies_feed, sweep_broken, scope_preset, scope_copy_locks, …).
       requestBody:
         content:
           application/x-www-form-urlencoded:
@@ -217,6 +216,9 @@ paths:
               properties:
                 setting: { type: string }
                 value: { type: string }
+                profile: { type: string }
+                top_k: { type: string }
+                preset: { type: string }
       responses:
         "200":
           description: Apply
@@ -226,6 +228,12 @@ paths:
                 $ref: "#/components/schemas/Apply"
         "400":
           $ref: "#/components/responses/Error"
+        "409":
+          description: busy (supersweep/relock) или conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/logout:
     post:
       tags: [core]
@@ -286,16 +294,21 @@ paths:
   /api/domains:
     get:
       tags: [core]
-      summary: Списки доменов
+      summary: Списки доменов / explain
       parameters:
         - name: action
           in: query
           schema:
             type: string
-            enum: [list, get, refresh_ips]
+            enum: [explain, refresh_ips, refresh_check]
+          description: Без action — сводка списков; explain требует domain=
         - name: list
           in: query
           schema: { type: string }
+        - name: domain
+          in: query
+          schema: { type: string }
+          description: Для action=explain
       responses:
         "200":
           description: Domains payload
@@ -313,9 +326,12 @@ paths:
             schema:
               type: object
               properties:
-                action: { type: string }
+                action:
+                  type: string
+                  description: add, remove, set, clear, import, …
                 list: { type: string }
                 content: { type: string }
+                url: { type: string, description: "import по URL (SSRF-checked)" }
       responses:
         "200":
           description: Apply
@@ -366,7 +382,7 @@ paths:
   /api/scopes:
     get:
       tags: [core]
-      summary: Client scopes
+      summary: Client scopes (чтение)
       responses:
         "200":
           description: Scopes
@@ -377,18 +393,13 @@ paths:
                 additionalProperties: true
     post:
       tags: [core]
-      summary: Управление scopes
-      requestBody:
-        content:
-          application/x-www-form-urlencoded:
-            schema:
-              type: object
-              properties:
-                action: { type: string }
-                name: { type: string }
+      summary: Client scopes (чтение; GET≡POST)
+      description: >
+        Мутации scopes — через /api/settings
+        (setting=client_scope|scope_preset|scope_copy_locks), не через этот путь.
       responses:
         "200":
-          description: Scopes result
+          description: Тот же payload, что у GET
           content:
             application/json:
               schema:
@@ -397,9 +408,20 @@ paths:
   /api/blob-upload:
     post:
       tags: [core]
-      summary: Загрузка TLS/WG blob (multipart)
+      summary: Загрузка TLS/WG blob
+      description: >
+        Канон — application/octet-stream (+ query/header kind).
+        multipart/form-data поддерживается опционально.
+      parameters:
+        - name: kind
+          in: query
+          schema: { type: string }
       requestBody:
         content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
           multipart/form-data:
             schema:
               type: object

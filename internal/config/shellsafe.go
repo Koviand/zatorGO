@@ -8,7 +8,7 @@ import (
 // ValidateSourceSafe проверяет, что текст config безопасен для `source` shell-скриптами
 // zapret2: только комментарии, пустые строки и присваивания NAME=…;
 // многострочные значения в кавычках не допускают «выхода» в команды;
-// запрещены $(...), backtick и ;|& вне кавычек.
+// запрещены $(...), backtick и shell-метасимволы (;|&<>(){}!?~*) вне кавычек.
 func ValidateSourceSafe(content string) error {
 	if strings.ContainsRune(content, 0) {
 		return fmt.Errorf("config: запрещены NUL-байты")
@@ -71,7 +71,7 @@ func assignmentQuoteState(rest string) (opens, closesClean bool, err error) {
 	}
 	if rest[0] != '"' {
 		if hasUnquotedShellMeta(rest) {
-			return false, false, fmt.Errorf("опасные shell-метасимволы (;|&) вне кавычек")
+			return false, false, fmt.Errorf("опасные shell-метасимволы (;|&<>(){}!?~*) вне кавычек")
 		}
 		return false, true, nil
 	}
@@ -133,7 +133,7 @@ func hasUnquotedShellMeta(s string) bool {
 			continue
 		}
 		switch r {
-		case ';', '|', '&':
+		case ';', '|', '&', '>', '<', '(', ')', '{', '}', '!', '?', '~', '*':
 			return true
 		}
 	}

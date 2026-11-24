@@ -63,6 +63,8 @@ func (f *fakeSvc) called() []string {
 type fakeChecker struct {
 	mu      sync.Mutex
 	targets []string
+	// FailProfiles — профили, для которых CheckProfile возвращает fail.
+	FailProfiles map[int]bool
 }
 
 func okResult(label, target string) netcheck.TargetResult {
@@ -78,6 +80,11 @@ func (c *fakeChecker) CheckProfile(ctx context.Context, id int) netcheck.CheckRe
 func (c *fakeChecker) CheckProfileOpts(_ context.Context, id int, _ netcheck.ProfileCheckOptions) netcheck.CheckResponse {
 	if id == 5 || id == 6 {
 		return netcheck.CheckResponse{Results: []netcheck.TargetResult{}, Message: netcheck.MessageUDPProfile}
+	}
+	if c.FailProfiles != nil && c.FailProfiles[id] {
+		r := okResult("profile", "https://x/")
+		r.TLS12, r.TLS13, r.Verdict, r.Text = 0, 0, netcheck.VerdictFail, "fail"
+		return netcheck.CheckResponse{Results: []netcheck.TargetResult{r}}
 	}
 	r := okResult("profile", "https://x/")
 	if id == 2 {

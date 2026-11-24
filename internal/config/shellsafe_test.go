@@ -36,6 +36,12 @@ func TestValidateSourceSafeRejects(t *testing.T) {
 		{"multiline breakout", "FOO=\"\n\"; reboot; echo \"\n"},
 		{"breakout same line", "FOO=\"x\"; reboot\n"},
 		{"subshell in quoted", "NFQWS2_OPT=\"\n$(reboot)\n\"\n"},
+		{"redirect out", "FWTYPE=iptables > /tmp/x\n"},
+		{"redirect in", "FWTYPE=iptables < /etc/passwd\n"},
+		{"unquoted paren", "FWTYPE=(iptables)\n"},
+		{"unquoted brace", "FWTYPE={iptables}\n"},
+		{"unquoted glob", "FWTYPE=iptables*\n"},
+		{"unquoted tilde", "PATH=~/bin\n"},
 		{"unclosed", "NFQWS2_OPT=\"\n--new\n"},
 		{"nul", "A=\x00\n"},
 	}
@@ -80,6 +86,11 @@ func FuzzValidateSourceSafe(f *testing.F) {
 		// Принятый конфиг не должен содержать опасные конструкции.
 		if strings.Contains(s, "$(") || strings.Contains(s, "`") || strings.ContainsRune(s, 0) {
 			t.Fatalf("accepted unsafe input: %q", s)
+		}
+		for _, needle := range []string{" > ", " < ", ";", "|", "&"} {
+			if strings.Contains(s, needle) && !strings.Contains(s, "\"") {
+				t.Fatalf("accepted unquoted meta %q in %q", needle, s)
+			}
 		}
 	})
 }
