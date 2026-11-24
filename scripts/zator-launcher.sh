@@ -225,13 +225,16 @@ require_https() {
 }
 
 download() {
-  url="$1"
-  dest="$2"
-  require_https "$url"
+  # Локальные имена: нельзя трогать глобальный url (иначе после SHA256SUMS.sig
+  # бинарник «скачивается» повторно как .sig → ложный mismatch sha256).
+  _dl_url="$1"
+  _dl_dest="$2"
+  require_https "$_dl_url"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 10 --retry 3 -o "$dest" "$url"
+    curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 10 --retry 3 \
+      -A "zator-launcher" -o "$_dl_dest" "$_dl_url"
   elif command -v wget >/dev/null 2>&1; then
-    wget -q -O "$dest" "$url"
+    wget -q -U "zator-launcher" -O "$_dl_dest" "$_dl_url"
   else
     die "нужен curl или wget"
   fi
