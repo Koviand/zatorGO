@@ -2,6 +2,7 @@ package webapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -65,25 +66,36 @@ func (s *Server) handleRepair(w http.ResponseWriter, r *http.Request, p params) 
 		Message: "repair mode=" + chosen,
 	})
 
-	switch chosen {
-	case "recommendations":
+	var recsFallback string
+	if chosen == "recommendations" {
 		out, err := s.postRecommendationsApply(r, paramsWith(p, map[string]string{
 			"profile": strconv.Itoa(id),
 			"scope":   scope,
 			"top_k":   firstNonEmpty(p.Get("top_k"), "1"),
 		}))
-		if err != nil {
+		if err == nil {
+			out["mode"] = "recommendations"
+			out["previous_lock"] = prevLock
+			out["started"] = true
+			s.publishEvent(Event{Type: "repair", State: "done", Profile: id, Message: "recommendations applied"})
+			writeJSON(w, http.StatusOK, out)
+			return
+		}
+		// Нет свежих рекомендаций / feed down → чиним через relock, а не 503.
+		if !isRepairRecsFallback(err) {
 			s.publishEvent(Event{Type: "repair", State: "fail", Profile: id, Message: err.Error()})
 			writeErr(w, err)
 			return
 		}
-		out["mode"] = chosen
-		out["previous_lock"] = prevLock
-		out["started"] = true
-		s.publishEvent(Event{Type: "repair", State: "done", Profile: id, Message: "recommendations applied"})
-		writeJSON(w, http.StatusOK, out)
-		return
+		recsFallback = err.Error()
+		chosen = "relock"
+		s.publishEvent(Event{
+			Type: "repair", State: "starting", Profile: id,
+			Message: "repair mode=relock (recommendations unavailable)",
+		})
+	}
 
+	switch chosen {
 	case "sweep":
 		worker, ok := sweep.ProfileWorker(id)
 		if !ok {
@@ -141,12 +153,28 @@ func (s *Server) handleRepair(w http.ResponseWriter, r *http.Request, p params) 
 			s.publishEvent(Event{Type: "repair", State: "done", Profile: id, Message: "relock finished"})
 		}()
 		s.publishEvent(Event{Type: "repair", State: "running", Profile: id, Message: "relock started"})
-		writeJSON(w, http.StatusOK, map[string]any{
+		out := map[string]any{
 			"ok": true, "started": true, "mode": "relock",
 			"previous_lock": prevLock, "scope": scope, "profile": id,
 			"async": true,
-		})
+		}
+		if recsFallback != "" {
+			out["recommendations_fallback"] = recsFallback
+		}
+		writeJSON(w, http.StatusOK, out)
 	}
+}
+
+func isRepairRecsFallback(err error) bool {
+	var ae *apiError
+	if !errors.As(err, &ae) || ae == nil {
+		return false
+	}
+	if ae.Code == CodeUnavailable || ae.Status == http.StatusServiceUnavailable {
+		return true
+	}
+	// Пустой top для профиля — тоже не «жёсткий» fail repair.
+	return ae.Status == http.StatusNotFound
 }
 
 func (s *Server) pickRepairMode(profile int) string {

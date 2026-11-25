@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/AloofLibra/zator/internal/orchestra"
 )
 
 func TestErrorEnvelopeHasCode(t *testing.T) {
@@ -93,6 +95,20 @@ func TestRepairRelockStarts(t *testing.T) {
 	}
 	if out["async"] != true {
 		t.Fatalf("expected async relock: %v", out)
+	}
+}
+
+func TestRepairRecommendationsFallsBackToRelock(t *testing.T) {
+	e := newEnv(t, envOpts{})
+	e.svc.running = true
+	_ = e.srv.applyProfileLock(orchestra.ScopeDefault, 1, orchestra.Strategy(3))
+	resp, out := e.post("/api/repair", "profile", "1", "mode", "recommendations")
+	wantStatus(t, resp, http.StatusOK)
+	if out["mode"] != "relock" || out["started"] != true {
+		t.Fatalf("want relock fallback, got %v", out)
+	}
+	if out["recommendations_fallback"] == nil || out["recommendations_fallback"] == "" {
+		t.Fatalf("expected recommendations_fallback: %v", out)
 	}
 }
 

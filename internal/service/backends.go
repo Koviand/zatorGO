@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/AloofLibra/zator/internal/fsutil"
 )
 
 // ---------------------------------------------------------------- вспомогательное
@@ -15,11 +17,8 @@ func (m *manager) writeFile(path, content string, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("service: %w", err)
 	}
-	if err := os.WriteFile(path, []byte(content), mode); err != nil {
-		return fmt.Errorf("service: %w", err)
-	}
-	// WriteFile не меняет права существующего файла.
-	if err := os.Chmod(path, mode); err != nil {
+	// WriteIfChanged: update/apply не долбят флеш, если хук/init уже актуальные.
+	if err := fsutil.WriteIfChanged(path, []byte(content), mode); err != nil {
 		return fmt.Errorf("service: %w", err)
 	}
 	return nil

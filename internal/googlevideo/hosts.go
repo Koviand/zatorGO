@@ -246,3 +246,16 @@ func (h *HostsFile) MergeLocalRows(rows []LocalRow) (int, error) {
 	}
 	return h.MergeFrom(raws)
 }
+
+// MergeAutoLocks добавляет синтетические rr1---sn-….googlevideo.com из auto_locked.
+func (h *HostsFile) MergeAutoLocks(locks []AutoLock) (int, error) {
+	raws := make([]string, 0, len(locks))
+	for _, l := range locks {
+		fqdn, ok := SyntheticRRHost(l.Host)
+		if !ok {
+			continue
+		}
+		raws = append(raws, fqdn)
+	}
+	return h.MergeFrom(raws)
+}

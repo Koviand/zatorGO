@@ -74,17 +74,23 @@ func (a *App) firewallRulesPresent(ctx context.Context) bool {
 	}
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	// ZATOR_NFQ — хук zator; NFQUEUE с qnum live (обычно 200) — апстрим.
+	// ZATOR_NFQ / Z2R_WS_MARK — наши цепочки; иначе любой NFQUEUE в mangle
+	// (live qnum бывает 200 или 300 — не завязываемся на одно число).
 	for _, args := range [][]string{
 		{"-w", "-t", "mangle", "-L", "ZATOR_NFQ", "-n"},
-		{"-w", "-t", "mangle", "-C", "POSTROUTING", "-j", "NFQUEUE", "--queue-num", "200"},
+		{"-w", "-t", "mangle", "-L", "Z2R_WS_MARK", "-n"},
 	} {
 		cmd := exec.CommandContext(cctx, "iptables", args...)
 		if err := cmd.Run(); err == nil {
 			return true
 		}
 	}
-	return false
+	cmd := exec.CommandContext(cctx, "iptables", "-w", "-t", "mangle", "-S")
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(out), "NFQUEUE")
 }
 
 // EnsureFirewallApplied вызывает init restart-fw на Entware/Keenetic (best-effort).

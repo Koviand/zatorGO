@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/AloofLibra/zator/internal/googlevideo"
+	"github.com/AloofLibra/zator/internal/paths"
 )
 
 var (
@@ -47,8 +48,8 @@ func (a *App) GooglevideoCollector() *googlevideo.Collector {
 	return gvCollect
 }
 
-// SyncGooglevideoHosts сливает SNI-лог и local.tsv в googlevideo-hosts.txt.
-// При появлении новых хостов подтягивает ipv4 для WSSIZE.
+// SyncGooglevideoHosts сливает SNI-лог, local.tsv и auto_locked (askey=2)
+// в googlevideo-hosts.txt. При появлении новых хостов подтягивает ipv4.
 func (a *App) SyncGooglevideoHosts() (added int, err error) {
 	h := a.GooglevideoHosts()
 	n1, err1 := h.MergeSNILog(a.Paths.GooglevideoSNILog())
@@ -59,11 +60,22 @@ func (a *App) SyncGooglevideoHosts() (added int, err error) {
 	if err2 != nil {
 		return n1, err2
 	}
-	added = n1 + n2
+	n3, err3 := h.MergeAutoLocks(a.autoLockedForHosts())
+	if err3 != nil {
+		return n1 + n2, err3
+	}
+	added = n1 + n2 + n3
 	if added > 0 {
 		_, _ = a.RefreshGooglevideoIPv4(context.Background(), false)
 	}
 	return added, nil
+}
+
+// autoLockedForHosts — live+backup auto_locked для askey=2 (googlevideo).
+func (a *App) autoLockedForHosts() []googlevideo.AutoLock {
+	live, _ := googlevideo.ParseAutoLockedTSV(paths.LiveAutoLockedTSV())
+	backup, _ := googlevideo.ParseAutoLockedTSV(a.Paths.AutoLockedTSV)
+	return googlevideo.FilterAskey(googlevideo.MergeAutoLocked(live, backup), "2")
 }
 
 // GooglevideoCollectionStatus — enabled|disabled для settings.

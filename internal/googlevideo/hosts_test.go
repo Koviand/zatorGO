@@ -89,6 +89,43 @@ func TestHostsFileMergeSNILog(t *testing.T) {
 	}
 }
 
+func TestHostsFileMergeAutoLocks(t *testing.T) {
+	dir := t.TempDir()
+	h := NewHostsFile(filepath.Join(dir, HostsFileName))
+	n, err := h.MergeAutoLocks([]AutoLock{
+		{Askey: "2", Host: "sn-ntqe6nes", Strategy: 41},
+		{Askey: "2", Host: "rr2---sn-aaa.googlevideo.com", Strategy: 41},
+		{Askey: "2", Host: "not-a-key", Strategy: 1},
+	})
+	if err != nil || n != 2 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	list, _ := h.List()
+	want := map[string]bool{
+		"rr1---sn-ntqe6nes.googlevideo.com": true,
+		"rr2---sn-aaa.googlevideo.com":      true,
+	}
+	if len(list) != 2 {
+		t.Fatalf("list=%v", list)
+	}
+	for _, got := range list {
+		if !want[got] {
+			t.Fatalf("unexpected %q in %v", got, list)
+		}
+	}
+}
+
+func TestSyntheticRRHost(t *testing.T) {
+	got, ok := SyntheticRRHost("sn-abc")
+	if !ok || got != "rr1---sn-abc.googlevideo.com" {
+		t.Fatalf("got=%q ok=%v", got, ok)
+	}
+	got, ok = SyntheticRRHost("rr5---sn-xyz.googlevideo.com")
+	if !ok || got != "rr5---sn-xyz.googlevideo.com" {
+		t.Fatalf("got=%q ok=%v", got, ok)
+	}
+}
+
 func TestObserveWritesHostsFile(t *testing.T) {
 	dir := t.TempDir()
 	hostsPath := filepath.Join(dir, HostsFileName)

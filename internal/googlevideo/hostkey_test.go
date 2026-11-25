@@ -14,6 +14,8 @@ func TestSNIHostKey(t *testing.T) {
 		{"RR2---SN-Q4FL6ND6.googlevideo.com", "sn-q4fl6nd6", true},
 		{"sn-u1i5h5-5q.googlevideo.com", "sn-u1i5h5-5q", true},
 		{"rr1---sn-bad_id.googlevideo.com", "", false}, // underscore вне [a-z0-9-]
+		{"sn-ntqe6nes", "sn-ntqe6nes", true},
+		{"SN-Q4FL6ND6", "sn-q4fl6nd6", true},
 		{"redirector.googlevideo.com", "", false},
 		{"www.youtube.com", "", false},
 		{"", "", false},

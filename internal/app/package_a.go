@@ -7,12 +7,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 
 	"github.com/AloofLibra/zator/internal/config"
 	"github.com/AloofLibra/zator/internal/firewall"
 	"github.com/AloofLibra/zator/internal/fsutil"
 	"github.com/AloofLibra/zator/internal/platform"
+	"github.com/AloofLibra/zator/internal/service"
 	"github.com/AloofLibra/zator/internal/uiembed"
 )
 
@@ -125,10 +128,42 @@ func (a *App) ApplyZapretRuntime() (fwHook string, err error) {
 	_ = a.SyncCustomDHooks(cfg)
 	_ = a.ensureHostlistPlaceholders()
 	_ = a.deployNfqwsWatchdog()
+	// Update/apply должны обновлять NDM/Merlin-хук (иначе debounce из нового
+	// бинарника не попадает на диск до полной переустановки).
+	_ = a.EnsureZapretServiceHooks(hook)
 	a.SyncAutoLockedPersist()
+	_, _ = a.SyncGooglevideoHosts()
 	// Package B: подтянуть googlevideo-ipv4 (best-effort, уважает TTL).
 	_, _ = a.RefreshGooglevideoIPv4(context.Background(), false)
 	return hook, nil
+}
+
+// EnsureZapretServiceHooks переустанавливает S90 + Keenetic/Merlin fw-хук
+// без рестарта службы. Идемпотентно (WriteIfChanged).
+func (a *App) EnsureZapretServiceHooks(fwHook string) error {
+	if a == nil || runtime.GOOS == "windows" {
+		return nil
+	}
+	if service.DetectBackend(a.Platform) != service.BackendEntware {
+		return nil
+	}
+	hook := service.DetectHook(a.Platform)
+	if hook != service.HookKeenetic && hook != service.HookMerlin {
+		return nil
+	}
+	mgr, err := service.New(service.Config{
+		Paths:    a.Paths,
+		Platform: a.Platform,
+		FWHook:   fwHook,
+		ZatorBin: filepath.Join(a.Paths.BinDir, "zator"),
+		ArgsFile: filepath.Join(a.Paths.ZapretRoot, "nfqws2.args"),
+	})
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return mgr.Install(ctx, service.UnitZapret2)
 }
 
 // SetNfqwsWantRunning выставляет/снимает флаг для Entware-watchdog.
