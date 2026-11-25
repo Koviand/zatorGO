@@ -4,14 +4,32 @@ import (
 	"context"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/AloofLibra/zator/internal/config"
 	"github.com/AloofLibra/zator/internal/netcheck"
 	"github.com/AloofLibra/zator/internal/orchestra"
 )
 
+func TestProfileHasFixedLockSkipsOff(t *testing.T) {
+	e := newEnv(t, envOpts{})
+	m := e.srv.relock
+	if m.profileHasFixedLock(1) {
+		t.Fatal("auto (нет строки) не должен считаться fixed")
+	}
+	_ = e.srv.applyProfileLock(orchestra.ScopeDefault, 1, orchestra.StrategyOff)
+	if m.profileHasFixedLock(1) {
+		t.Fatal("lock 0 (OFF) не должен считаться fixed — relock не включает профиль")
+	}
+	_ = e.srv.applyProfileLock(orchestra.ScopeDefault, 1, orchestra.Strategy(5))
+	if !m.profileHasFixedLock(1) {
+		t.Fatal("lock 5 должен быть fixed")
+	}
+}
+
 func TestTryRelockUsesProbeThenAppliesLive(t *testing.T) {
 	e := newEnv(t, envOpts{})
+	e.svc.running = true // gate: zapretWantedAndRunning
 	_ = e.srv.applyProfileLock(orchestra.ScopeDefault, 1, orchestra.Strategy(3))
 
 	stub := &stubStrategyProber{Result: 7}
@@ -38,6 +56,7 @@ func TestTryRelockUsesProbeThenAppliesLive(t *testing.T) {
 
 func TestTryRelockKeepsLiveLockOnProbeFail(t *testing.T) {
 	e := newEnv(t, envOpts{})
+	e.svc.running = true
 	_ = e.srv.applyProfileLock(orchestra.ScopeDefault, 1, orchestra.Strategy(3))
 	e.srv.prober = &stubStrategyProber{Result: 0}
 	e.srv.relock.tryRelock(context.Background(), 1)
@@ -48,6 +67,7 @@ func TestTryRelockKeepsLiveLockOnProbeFail(t *testing.T) {
 
 func TestTryRelockRollsBackOnLiveVerifyFail(t *testing.T) {
 	e := newEnv(t, envOpts{})
+	e.svc.running = true
 	_ = e.srv.applyProfileLock(orchestra.ScopeDefault, 1, orchestra.Strategy(3))
 	e.srv.prober = &stubStrategyProber{Result: 7}
 	e.srv.checker = &failingChecker{failProfile: 1} // live verify всегда fail
@@ -59,6 +79,7 @@ func TestTryRelockRollsBackOnLiveVerifyFail(t *testing.T) {
 
 func TestTryRelockBlockedByAutoMode(t *testing.T) {
 	e := newEnv(t, envOpts{})
+	e.svc.running = true
 	_ = e.srv.applyProfileLock(orchestra.ScopeDefault, 1, orchestra.Strategy(3))
 	if err := e.srv.editConfigs(func(c *config.Config) error {
 		return c.SetAutoMode(true)
@@ -93,6 +114,7 @@ func TestBeginRelockBlocksSoftSweep(t *testing.T) {
 
 func TestTryRelockSkipsWhenSweepBusy(t *testing.T) {
 	e := newEnv(t, envOpts{})
+	e.svc.running = true
 	_ = e.srv.applyProfileLock(orchestra.ScopeDefault, 1, orchestra.Strategy(2))
 	e.sweeper.started = true
 	e.srv.sweeper = e.sweeper
@@ -109,6 +131,7 @@ func TestTryRelockSkipsWhenSweepBusy(t *testing.T) {
 
 func TestTickTriggersProbeRelock(t *testing.T) {
 	e := newEnv(t, envOpts{})
+	e.svc.running = true
 	_ = e.srv.flags.set(BypassFlags{AutoRelock: true, AutoRelockFails: 2})
 	_ = e.srv.applyProfileLock(orchestra.ScopeDefault, 1, orchestra.Strategy(3))
 	stub := &stubStrategyProber{Result: 8}
@@ -123,6 +146,36 @@ func TestTickTriggersProbeRelock(t *testing.T) {
 	}
 	if got := e.srv.profileLockLabel(orchestra.ScopeDefault, 1); got != "8" {
 		t.Fatalf("lock = %q, want 8", got)
+	}
+}
+
+func TestTickSkipsWhenZapretDown(t *testing.T) {
+	e := newEnv(t, envOpts{})
+	e.svc.running = false
+	_ = e.srv.flags.set(BypassFlags{AutoRelock: true, AutoRelockFails: 1})
+	_ = e.srv.applyProfileLock(orchestra.ScopeDefault, 1, orchestra.Strategy(3))
+	stub := &stubStrategyProber{Result: 9}
+	e.srv.prober = stub
+	e.srv.checker = &failingChecker{failProfile: 1}
+	e.srv.relock.tick(context.Background())
+	if stub.Calls != 0 {
+		t.Fatal("probe must not run when zapret2 is down")
+	}
+}
+
+func TestTickCooldownAfterFailedRelock(t *testing.T) {
+	e := newEnv(t, envOpts{})
+	e.svc.running = true
+	_ = e.srv.flags.set(BypassFlags{AutoRelock: true, AutoRelockFails: 1})
+	_ = e.srv.applyProfileLock(orchestra.ScopeDefault, 1, orchestra.Strategy(3))
+	stub := &stubStrategyProber{Result: 0} // fail
+	e.srv.prober = stub
+	e.srv.checker = &failingChecker{failProfile: 1}
+	e.srv.relock.cooldown = time.Hour
+	e.srv.relock.tick(context.Background()) // tryRelock fail → lastRelock set
+	e.srv.relock.tick(context.Background()) // cooldown
+	if stub.Calls != 1 {
+		t.Fatalf("probe calls=%d want 1 (second tick in cooldown)", stub.Calls)
 	}
 }
 

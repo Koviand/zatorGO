@@ -96,6 +96,56 @@ func TestRepairRelockStarts(t *testing.T) {
 	}
 }
 
+func TestRepairSweepStartsWithDefaultDomains(t *testing.T) {
+	e := newEnv(t, envOpts{})
+	resp, out := e.post("/api/repair", "profile", "1", "mode", "sweep")
+	wantStatus(t, resp, http.StatusOK)
+	if out["started"] != true || out["mode"] != "sweep" {
+		t.Fatalf("%v", out)
+	}
+	if !e.sweeper.started {
+		t.Fatal("sweeper not started")
+	}
+	if len(e.sweeper.params.Domains) == 0 {
+		t.Fatal("ожидались домены из DefaultParams (иначе ErrNoDomains)")
+	}
+	if len(e.sweeper.params.Workers) != 1 || e.sweeper.params.Workers[0] == "" {
+		t.Fatalf("workers=%v", e.sweeper.params.Workers)
+	}
+}
+
+func TestRepairSweepRejectsUDPProfile(t *testing.T) {
+	e := newEnv(t, envOpts{})
+	resp, out := e.post("/api/repair", "profile", "5", "mode", "sweep")
+	wantStatus(t, resp, http.StatusBadRequest)
+	if got, _ := out["code"].(string); got != CodeValidation {
+		t.Fatalf("code=%q body=%v", got, out)
+	}
+	if e.sweeper.started {
+		t.Fatal("sweep must not start for profile 5")
+	}
+}
+
+func TestEventHubRemovesWaiterOnTimeout(t *testing.T) {
+	h := newEventHub()
+	done := make(chan struct{})
+	go func() {
+		_, _ = h.wait(0, 30*time.Millisecond)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("wait hung")
+	}
+	h.mu.Lock()
+	n := len(h.waiters)
+	h.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("waiters left after timeout: %d", n)
+	}
+}
+
 func TestEventsLongPoll(t *testing.T) {
 	e := newEnv(t, envOpts{})
 	e.srv.publishEvent(Event{Type: "repair", State: "starting", Profile: 1, Message: "test"})

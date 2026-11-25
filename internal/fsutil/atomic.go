@@ -2,6 +2,7 @@
 package fsutil
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +19,15 @@ const (
 	renameAttempts = 8
 	renameDelay    = 15 * time.Millisecond
 )
+
+// WriteIfChanged атомарно пишет data только если содержимое файла отличается
+// (или файла нет). Снижает износ флеша на роутерах при повторных apply.
+func WriteIfChanged(path string, data []byte, perm os.FileMode) error {
+	if old, err := os.ReadFile(path); err == nil && bytes.Equal(old, data) {
+		return nil
+	}
+	return AtomicWriteFile(path, data, perm)
+}
 
 // AtomicWriteFile записывает data в path атомарно: данные пишутся во временный
 // файл в том же каталоге, синхронизируются на диск и переименовываются поверх

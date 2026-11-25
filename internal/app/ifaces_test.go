@@ -31,6 +31,18 @@ func TestEnsureNetworkIfacesSetsFromRoute(t *testing.T) {
 	}
 }
 
+func TestRequireRouterIfaces(t *testing.T) {
+	if !requireRouterIfaces(platform.Platform{Kind: platform.KindEntware}) {
+		t.Fatal("Entware must require ifaces")
+	}
+	if !requireRouterIfaces(platform.Platform{Kind: platform.KindOpenWRT}) {
+		t.Fatal("OpenWRT must require ifaces")
+	}
+	if requireRouterIfaces(platform.Platform{Kind: platform.KindVPS}) {
+		t.Fatal("VPS must soft-fail ifaces")
+	}
+}
+
 func TestApplyDetectedIfacesOpenWRTSkip(t *testing.T) {
 	root := t.TempDir()
 	zator := filepath.Join(root, "zator")

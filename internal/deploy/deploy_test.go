@@ -134,6 +134,29 @@ func TestDetectOfflineBundle(t *testing.T) {
 	}
 }
 
+func TestDetectOfflineTruthyAliases(t *testing.T) {
+	for _, v := range []string{"1", "true", "TRUE", "yes", "on"} {
+		st := DetectOffline(func(k string) string {
+			if k == EnvOffline {
+				return v
+			}
+			return ""
+		}, "")
+		if !st.Offline || st.Reason != "env" {
+			t.Fatalf("v=%q status=%+v", v, st)
+		}
+	}
+	st := DetectOffline(func(k string) string {
+		if k == EnvOffline {
+			return "false"
+		}
+		return ""
+	}, "")
+	if st.Offline {
+		t.Fatalf("false must not be offline: %+v", st)
+	}
+}
+
 func TestResolveOfflineBundleEnv(t *testing.T) {
 	dir := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(dir, "vendor"), 0o755)

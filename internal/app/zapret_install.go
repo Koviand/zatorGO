@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/AloofLibra/zator/internal/deploy"
 	"github.com/AloofLibra/zator/internal/uiembed"
 	"github.com/AloofLibra/zator/internal/zapret"
 )
@@ -56,9 +57,22 @@ func (a *App) InstallZapret(ctx context.Context, opts InstallZapretOptions) (*za
 		IncludeLua: true,
 		MirrorBase: a.Config.Mirror,
 	}
+	// Офлайн-бандл (ZATOR_BUNDLE_DIR / Z2R_OFFLINE): vendor/ с архивом zapret2.
+	off := deploy.ResolveOfflineBundle(os.Getenv)
+	zopts.Offline = off.Offline
+	if off.Bundle != nil {
+		zopts.VendorDir = off.Bundle.VendorDir
+	}
 	log := opts.Log
 	if log == nil {
 		log = io.Discard
+	}
+	if off.Offline {
+		fmt.Fprintf(log, "офлайн-режим (%s)", off.Reason)
+		if off.Bundle != nil {
+			fmt.Fprintf(log, ", vendor=%s", off.Bundle.VendorDir)
+		}
+		fmt.Fprintln(log)
 	}
 	// Сначала системные зависимости (iptables/ipset/модули) — иначе firewall
 	// после старта служб молча не поднимется.
@@ -90,7 +104,9 @@ func (a *App) InstallZapret(ctx context.Context, opts InstallZapretOptions) (*za
 
 	lan, wan, ifaceErr := a.ApplyDetectedIfaces()
 	if ifaceErr != nil {
-		if isRouterHost() {
+		// Hard-fail IFACE только на роутерах (Entware/OpenWRT): без LAN/WAN
+		// firewall бесполезен. На VPS — warning, Web UI всё равно поднимаем.
+		if requireRouterIfaces(a.Platform) {
 			return res, fmt.Errorf("IFACE_WAN/LAN: %w", ifaceErr)
 		}
 		fmt.Fprintf(log, "предупреждение IFACE: %v\n", ifaceErr)

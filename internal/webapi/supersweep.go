@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/AloofLibra/zator/internal/firewall"
 	"github.com/AloofLibra/zator/internal/netcheck"
@@ -55,6 +56,9 @@ func (s *Server) sweeperOrDefault() (Sweeper, error) {
 	}
 
 	opts := netcheck.DefaultOptions()
+	// Обе TLS-версии учитываются в вердикте (иначе гонка 1.2/1.3 и tls_pref=both мёртв).
+	opts.WaitBoth = true
+	opts.ProbeGap = 50 * time.Millisecond
 	opts.DialContext = netcheck.BindPortRangeDialer(
 		firewall.SuperSweepPortFirst, firewall.SuperSweepPortLast)
 	checker := netcheck.NewChecker(opts)
@@ -72,6 +76,21 @@ func (s *Server) sweeperOrDefault() (Sweeper, error) {
 		Checker:     checker,
 		MaxStrategy: s.maxStrategy,
 		GVURL:       func(ctx context.Context) string { return "https://" + checker.ClusterDomain(ctx) },
+		Gate: func(ctx context.Context) netcheck.GateResult {
+			return (&netcheck.SpoofGate{}).Check(ctx)
+		},
+		OnProfileLock: func(profile, strategy int) {
+			if s.lockOrigin != nil && profile >= 1 && strategy > 0 {
+				_ = s.lockOrigin.Set(profile, OriginSupersweep)
+			}
+		},
+		CanApplyProfile: func(profile int) bool {
+			cfgLive, ok := s.readConfig()
+			if !ok || cfgLive == nil {
+				return true
+			}
+			return autoConflict(cfgLive, profile) == nil && profileModeGuard(cfgLive, profile) == nil
+		},
 	}
 	coord, err := sweep.New(cfg)
 	if err != nil {

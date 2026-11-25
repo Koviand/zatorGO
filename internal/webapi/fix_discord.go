@@ -45,6 +45,12 @@ func (s *Server) postFixDiscord(r *http.Request, p params) (map[string]any, erro
 	if err := profileModeGuard(cfg, discordTCPProfile); err != nil {
 		return nil, err
 	}
+	// Probe трогает общий Z2R_SS_* — не пересекаться с supersweep/relock.
+	if !s.beginRelock() {
+		return nil, errCode(http.StatusConflict, CodeBusy,
+			"Служба занята суперавтопрогоном или auto-relock")
+	}
+	defer s.endRelock()
 
 	c := telemetry.New(s.paths)
 	rec, _ := c.LoadRecommendations()
@@ -64,15 +70,15 @@ func (s *Server) postFixDiscord(r *http.Request, p params) (map[string]any, erro
 	}
 
 	out := map[string]any{
-		"ok":             result == "ok",
-		"result":         result,
-		"tcp":            tcpStatus,
-		"udp":            udpStatus,
-		"udp_verified":   false, // честно: нет UDP/voice probe в netcheck
-		"tcp_profile":    discordTCPProfile,
-		"voice_profile":  discordVoiceProfile,
-		"hostlist_ok":    hostOK,
-		"hostlist":       hostlist,
+		"ok":            result == "ok",
+		"result":        result,
+		"tcp":           tcpStatus,
+		"udp":           udpStatus,
+		"udp_verified":  false, // честно: нет UDP/voice probe в netcheck
+		"tcp_profile":   discordTCPProfile,
+		"voice_profile": discordVoiceProfile,
+		"hostlist_ok":   hostOK,
+		"hostlist":      hostlist,
 	}
 	if tcpStrategy > 0 {
 		out["tcp_strategy"] = tcpStrategy

@@ -48,13 +48,24 @@ func (s *Server) validatorUnitAlive() bool {
 	if s.svc == nil {
 		return false
 	}
+	now := s.now()
+	s.procCacheMu.Lock()
+	if !s.procCache.validatorAt.IsZero() && now.Sub(s.procCache.validatorAt) < procStatusTTL {
+		ok := s.procCache.validatorOK
+		s.procCacheMu.Unlock()
+		return ok
+	}
+	s.procCacheMu.Unlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	st, err := s.svc.Status(ctx, service.UnitValidator)
-	if err != nil {
-		return false
-	}
-	return st.Running
+	ok := err == nil && st.Running
+	s.procCacheMu.Lock()
+	s.procCache.validatorAt = now
+	s.procCache.validatorOK = ok
+	s.procCacheMu.Unlock()
+	return ok
 }
 
 func (s *Server) relockHasDegraded() bool {

@@ -72,11 +72,21 @@
 
 ## Ручной QA (роутер / VPS)
 
+Прогон **2026-11-25** на Keenetic Entware `aarch64` (KN, Linux 4.9-ndm), ZatorGO **v0.1.47**, Web UI `:17682`, zapret2/nfqws2 running.
+
 - [ ] Ubuntu 22/24: `curl …/zator-launcher.sh | sh`, открыть Web UI, start zapret2
 - [ ] Debian cloud VPS: install + check YouTube/Discord
 - [ ] OpenWRT: procd unit, nftables, wssize-ramp
-- [ ] Keenetic Entware: S90, ndm hook, iptables
+- [x] Keenetic Entware: S90-zapret2, ndm `netfilter.d/000-zapret2.sh`, iptables+ipset+NFQUEUE 300, S91/S92/S93 watchdog/validator/webui
 - [ ] Merlin: firewall-start hook
-- [ ] MIPS/arm бинарник стартует, Web UI отвечает, locks пишутся атомарно
+- [x] arm64 бинарник стартует, Web UI/`/api/capabilities` отвечают, `set-lock` атомарно (профиль 3), health `overall=ok` / `validator=ok`
 - [ ] Offline bundle на устройстве без GitHub
-- [ ] Update path: latest.json → apply keep-if-exists
+- [x] Update path: `update_check` → `release=v0.1.47`, `update_available=false` (уже latest)
+
+### Полевой smoke Bypass (тот же хост)
+
+- [x] BP5 `fix_discord`: `result=partial`, `tcp=ok` (лок 16), `udp=skipped` (honesty), Discord TLS check **ok**
+- [x] BP1 полный цикл: `auto_relock` fails=1 → YT лок 2 (fail) → probe → лок **3**, `lock_origin=auto_relock`; затем auto_relock выключен
+- [ ] BP4 успешный TLS к googlevideo sn-*: `refresh_ips` ok (402); supersweep `workers=gv` **44/44 fail**; curl sn-* timeout с WAN
+- [x] Supersweep полный ранее: `248/248`; gv-only повтор 2026-11-25 без победителя (CDN)
+- [x] YouTube TCP после BP1 (лок 3): check **warn**/ok path жив

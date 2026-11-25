@@ -5,13 +5,19 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/AloofLibra/zator/internal/fsutil"
 	"github.com/AloofLibra/zator/internal/netcheck"
 	"github.com/AloofLibra/zator/internal/orchestra"
 	"github.com/AloofLibra/zator/internal/sweep"
 )
+
+const sweepLastRunFile = "sweep_schedule_last.txt"
 
 // startSweepScheduler — редкий schedule supersweep (выкл при hours=0).
 func (s *Server) startSweepScheduler(ctx context.Context) {
@@ -26,10 +32,31 @@ func (s *Server) startSweepScheduler(ctx context.Context) {
 	go s.sweepScheduleLoop(cctx)
 }
 
+func (s *Server) sweepLastRunPath() string {
+	return filepath.Join(s.paths.StateDir, sweepLastRunFile)
+}
+
+func (s *Server) loadSweepLastRun() time.Time {
+	b, err := os.ReadFile(s.sweepLastRunPath())
+	if err != nil {
+		return time.Time{}
+	}
+	sec, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+	if err != nil || sec <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(sec, 0)
+}
+
+func (s *Server) saveSweepLastRun(t time.Time) {
+	_ = os.MkdirAll(s.paths.StateDir, 0o755)
+	_ = fsutil.WriteIfChanged(s.sweepLastRunPath(),
+		[]byte(strconv.FormatInt(t.Unix(), 10)+"\n"), 0o644)
+}
+
 func (s *Server) sweepScheduleLoop(ctx context.Context) {
 	t := time.NewTicker(30 * time.Minute)
 	defer t.Stop()
-	var lastRun time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -39,17 +66,25 @@ func (s *Server) sweepScheduleLoop(ctx context.Context) {
 			if f.SweepScheduleHours <= 0 {
 				continue
 			}
+			lastRun := s.loadSweepLastRun()
 			if !lastRun.IsZero() && s.now().Sub(lastRun) < time.Duration(f.SweepScheduleHours)*time.Hour {
 				continue
 			}
 			if s.sweepRunningLocked() {
 				continue
 			}
-			if err := s.queueSoftSweep(ctx, nil, "schedule"); err != nil {
+			// Только сломанные профили — не перетирать рабочие локи полным прогоном.
+			workers := s.brokenWorkers(ctx)
+			if len(workers) == 0 {
+				s.saveSweepLastRun(s.now())
+				log.Printf("webapi: schedule sweep: нет сломанных профилей — skip")
+				continue
+			}
+			if err := s.queueSoftSweep(ctx, workers, "schedule"); err != nil {
 				log.Printf("webapi: schedule sweep: %v", err)
 				continue
 			}
-			lastRun = s.now()
+			s.saveSweepLastRun(s.now())
 		}
 	}
 }
@@ -111,7 +146,13 @@ func (s *Server) postSweepBroken(r *http.Request, p params) (map[string]any, err
 
 func (s *Server) brokenWorkers(ctx context.Context) []string {
 	var out []string
+	cfg, _ := s.readConfig()
 	for _, id := range relockWatchProfiles() {
+		if cfg != nil {
+			if autoConflict(cfg, id) != nil || profileModeGuard(cfg, id) != nil {
+				continue
+			}
+		}
 		cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		ok := profileCheckOK(s.checker.CheckProfile(cctx, id))
 		cancel()
@@ -135,7 +176,12 @@ func (s *Server) maybeSweepOnProviderChange(prevDisplay, _prevBrand, newDisplay,
 		return
 	}
 	go func() {
-		if err := s.queueSoftSweep(context.Background(), nil, "provider_change"); err != nil {
+		workers := s.brokenWorkers(context.Background())
+		if len(workers) == 0 {
+			log.Printf("webapi: provider change: нет сломанных — sweep skip")
+			return
+		}
+		if err := s.queueSoftSweep(context.Background(), workers, "provider_change"); err != nil {
 			if !errors.Is(err, sweep.ErrBusy) {
 				log.Printf("webapi: sweep on provider change: %v", err)
 			}

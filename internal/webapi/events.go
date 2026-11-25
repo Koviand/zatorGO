@@ -88,8 +88,21 @@ func (h *eventHub) wait(after uint64, timeout time.Duration) (items []eventItem,
 	select {
 	case <-ch:
 	case <-t.C:
+		// Снять waiter по таймауту — иначе тысячи висящих chan в сутки.
+		h.removeWaiter(ch)
 	}
 	return h.since(after)
+}
+
+func (h *eventHub) removeWaiter(ch chan struct{}) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for i, w := range h.waiters {
+		if w == ch {
+			h.waiters = append(h.waiters[:i], h.waiters[i+1:]...)
+			return
+		}
+	}
 }
 
 // publishEvent публикует событие (no-op до инициализации hub).

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/AloofLibra/zator/internal/fsutil"
@@ -65,9 +66,29 @@ func (a *App) resolveZapretInit() string {
 	return ""
 }
 
+// firewallRulesPresent — дешёвая проверка: цепочка/правила NFQUEUE уже на месте.
+// Если да — повторный restart-fw не нужен (ndm/watchdog не штормят).
+func (a *App) firewallRulesPresent(ctx context.Context) bool {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	// ZATOR_NFQ — хук zator; NFQUEUE с qnum live (обычно 200) — апстрим.
+	for _, args := range [][]string{
+		{"-w", "-t", "mangle", "-L", "ZATOR_NFQ", "-n"},
+		{"-w", "-t", "mangle", "-C", "POSTROUTING", "-j", "NFQUEUE", "--queue-num", "200"},
+	} {
+		cmd := exec.CommandContext(cctx, "iptables", args...)
+		if err := cmd.Run(); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // EnsureFirewallApplied вызывает init restart-fw на Entware/Keenetic (best-effort).
-// На других платформах — skip. Ошибки пишутся в state, но не валят start
-// (ndm сам переприменит хук); возвращаются для логов/warnings.
+// На других платформах — skip. Если правила уже есть и недавний ok — no-op.
 func (a *App) EnsureFirewallApplied(ctx context.Context) error {
 	if a.Platform.InitSystem != platform.InitEntware && a.Platform.Kind != platform.KindEntware &&
 		service.DetectHook(a.Platform) == service.HookNone {
@@ -82,6 +103,14 @@ func (a *App) EnsureFirewallApplied(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// Не дёргать restart-fw, если правила уже на месте.
+	if a.firewallRulesPresent(ctx) {
+		if st, _ := a.FwEnsureStatus(); st != "ok" {
+			a.writeFwEnsure("ok", "rules already present")
+		}
+		return nil
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, init, "restart-fw")
@@ -117,15 +146,5 @@ func splitTwo(s string) [2]string {
 }
 
 func trimSpaceASCII(s string) string {
-	for len(s) > 0 && (s[0] == ' ' || s[0] == '\t' || s[0] == '\r') {
-		s = s[1:]
-	}
-	for len(s) > 0 {
-		c := s[len(s)-1]
-		if c != ' ' && c != '\t' && c != '\r' && c != '\n' {
-			break
-		}
-		s = s[:len(s)-1]
-	}
-	return s
+	return strings.TrimSpace(s)
 }

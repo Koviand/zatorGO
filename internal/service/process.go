@@ -17,12 +17,19 @@ var ErrScanUnsupported = errors.New("service: сканирование проц�
 // Matcher проверяет процесс по имени (comm) и аргументам командной строки.
 type Matcher func(comm string, cmdline []string) bool
 
-// MatchNfqws2 выбирает процессы nfqws2.
+// MatchNfqws2 выбирает процессы live nfqws2 (не изолированный probe qnum=65535).
 func MatchNfqws2(comm string, cmdline []string) bool {
-	if comm == "nfqws2" {
-		return true
+	isNfq := comm == "nfqws2" || (len(cmdline) > 0 && exeBase(cmdline[0]) == "nfqws2")
+	if !isNfq {
+		return false
 	}
-	return len(cmdline) > 0 && exeBase(cmdline[0]) == "nfqws2"
+	// SuperSweep/relock probe: --qnum=65535 — не считать zapret2 «работающим».
+	for _, a := range cmdline {
+		if a == "--qnum=65535" || strings.HasPrefix(a, "--qnum=65535") {
+			return false
+		}
+	}
+	return true
 }
 
 // MatchWebUI выбирает процессы «zator webui|serve».

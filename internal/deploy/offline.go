@@ -85,7 +85,7 @@ func DetectOffline(getenv func(string) string, bundleDir string) OfflineStatus {
 		st.Bundle = &b
 	}
 	for _, k := range []string{EnvOffline, EnvOfflineAlias} {
-		if strings.TrimSpace(getenv(k)) == "1" {
+		if envTruthy(getenv(k)) {
 			st.Offline, st.Reason = true, "env"
 			return st
 		}
@@ -190,4 +190,14 @@ func ResolveOfflineBundle(getenv func(string) string) OfflineStatus {
 		}
 	}
 	return st
+}
+
+// envTruthy — как zapret.envTruthy: 1/true/yes/on (без учёта регистра).
+func envTruthy(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }

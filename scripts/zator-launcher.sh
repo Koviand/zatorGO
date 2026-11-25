@@ -193,6 +193,15 @@ ensure_deps() {
   echo "zator-launcher: зависимости подготовлены" >&2
 }
 
+# elf_endian — EI_DATA из ELF-заголовка (01=LE, 02=BE). Пусто — не удалось.
+elf_endian() {
+  local f="${1:-/bin/sh}"
+  [[ -r "$f" ]] || f="/bin/busybox"
+  [[ -r "$f" ]] || return 0
+  # Байты 0..3: magic; байт 4: EI_CLASS; байт 5: EI_DATA (01=LE, 02=BE).
+  od -An -tx1 -j5 -N1 "$f" 2>/dev/null | tr -d ' \n'
+}
+
 detect_arch() {
   m=$(uname -m 2>/dev/null || echo unknown)
   case "$m" in
@@ -201,9 +210,21 @@ detect_arch() {
     aarch64|arm64) echo arm64 ;;
     armv7*|armv6*|arm) echo arm ;;
     mips64el|mips64le) echo mipsel64 ;;
-    mips64) echo mips64 ;;
+    mips64)
+      # uname часто врёт endian; EI_DATA бинарника надёжнее.
+      case "$(elf_endian)" in
+        01) echo mipsel64 ;;
+        *) echo mips64 ;;
+      esac
+      ;;
     mipsel|mipsle) echo mipsel ;;
-    mips) echo mips ;;
+    mips)
+      # Keenetic/OpenWrt MT7621: uname -m=mips при little-endian → нужен mipsel.
+      case "$(elf_endian)" in
+        01) echo mipsel ;;
+        *) echo mips ;;
+      esac
+      ;;
     ppc|ppc32) echo ppc ;;
     ppc64|ppc64le) echo ppc ;;
     riscv64) echo riscv64 ;;

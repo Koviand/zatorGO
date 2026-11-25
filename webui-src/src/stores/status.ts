@@ -15,13 +15,19 @@ export const statusCheckRan = ref(false)
 /** RM0a: кэш /api/capabilities (через state?include=) для gating UI. */
 export const capabilities = ref<CapabilitiesPayload | null>(null)
 
+let scopesPollEvery = 0
+
 export async function refreshAll() {
   const payload = await fetchStatus(scope.value)
   status.value = payload
   locks.value = payload.profiles || []
-  try {
-    scopes.value = await fetchScopes()
-  } catch {
-    // определение scope необязательно для старых роутеров
+  // scopes.cgi тяжёлый — не на каждый 15s poll; client_scope уже в status.
+  scopesPollEvery++
+  if (!statusLoaded.value || scopesPollEvery % 4 === 1) {
+    try {
+      scopes.value = await fetchScopes()
+    } catch {
+      // определение scope необязательно для старых роутеров
+    }
   }
 }

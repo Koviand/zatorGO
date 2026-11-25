@@ -109,6 +109,7 @@ func (s *Server) handleService(w http.ResponseWriter, r *http.Request, p params)
 			} else {
 				s.app.ClearServiceWarnings()
 			}
+			s.invalidateProcCache()
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 			return
 		}
@@ -120,6 +121,7 @@ func (s *Server) handleService(w http.ResponseWriter, r *http.Request, p params)
 		})
 		return
 	}
+	s.invalidateProcCache()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Собирает офлайн-бандл: vendor/ (zapret2 архивы) + zator-full.tar.gz + launcher.
+# Собирает офлайн-бандл: vendor/ (zapret2 архивы + zator-linux-*) + zator-full.tar.gz + launcher.
+# Бинарник zator НЕ кладётся в tar: ApplyBundle иначе перезапишет /opt/zator/bin/zator
+# чужой arch (раньше всегда был x86_64). Нужный бинарник — из vendor/ через launcher.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${1:-$ROOT/dist/offline}"
@@ -10,17 +12,17 @@ if [[ ! -d "$ROOT/dist" ]] || ! ls "$ROOT/dist"/zator-linux-* >/dev/null 2>&1; t
   OUT="$ROOT/dist" bash "$ROOT/scripts/crossbuild.sh"
 fi
 
-# Минимальный full-архив из assets + бинарник хост-arch (для применения deploy.Apply).
+# Assets only — без bin/zator (arch-specific бинарники в vendor/).
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
-mkdir -p "$STAGE/extra_strats/cache/deploy" "$STAGE/webui" "$STAGE/lua" "$STAGE/lists" "$STAGE/bin"
+mkdir -p "$STAGE/extra_strats/cache/deploy" "$STAGE/webui" "$STAGE/lua" "$STAGE/lists" "$STAGE/config"
 cp -a "$ROOT/assets/webui/." "$STAGE/webui/"
 cp -a "$ROOT/assets/lua/." "$STAGE/lua/" 2>/dev/null || true
 cp -a "$ROOT/assets/lists/." "$STAGE/lists/" 2>/dev/null || true
-cp "$ROOT/assets/config.default" "$STAGE/config.default"
-cp "$ROOT/dist/zator-linux-x86_64" "$STAGE/bin/zator" 2>/dev/null || true
+cp "$ROOT/assets/config.default" "$STAGE/config/config.default"
 
 # Манифест: path|dest|class|sha256|size|exec
+# lists/* — keep-if-exists (не затирать пользовательские списки при ApplyBundle).
 MAN="$STAGE/extra_strats/cache/deploy/manifest.tsv"
 : > "$MAN"
 while IFS= read -r -d '' f; do
@@ -30,7 +32,11 @@ while IFS= read -r -d '' f; do
   size=$(wc -c <"$f" | tr -d ' ')
   exec=0
   [[ -x "$f" ]] && exec=1
-  printf '%s|/opt/zator/%s|auto|%s|%s|%s\n' "$rel" "$rel" "$sum" "$size" "$exec" >>"$MAN"
+  class=auto
+  case "$rel" in
+    lists/*) class=keep-if-exists ;;
+  esac
+  printf '%s|/opt/zator/%s|%s|%s|%s|%s\n' "$rel" "$rel" "$class" "$sum" "$size" "$exec" >>"$MAN"
 done < <(find "$STAGE" -type f -print0)
 
 cat >"$STAGE/extra_strats/cache/deploy/version.env" <<EOF
@@ -69,10 +75,15 @@ if [[ ! -f "$OUT/vendor/$ZAPRET_ASSET" ]]; then
     echo "warn: не удалось скачать zapret2; положите $ZAPRET_ASSET в vendor/ вручную" >&2
   }
 fi
+# Sidecar для офлайн InstallZapret (Options.SHA256 / resolveLocalArchiveSHA256).
+if [[ -f "$OUT/vendor/$ZAPRET_ASSET" ]]; then
+  sha256sum "$OUT/vendor/$ZAPRET_ASSET" | awk '{print $1}' >"$OUT/vendor/${ZAPRET_ASSET}.sha256"
+fi
 # Копия рядом с репозиторием для офлайн-разработки.
 mkdir -p "$ROOT/vendor"
 if [[ -f "$OUT/vendor/$ZAPRET_ASSET" && ! -f "$ROOT/vendor/$ZAPRET_ASSET" ]]; then
   cp "$OUT/vendor/$ZAPRET_ASSET" "$ROOT/vendor/$ZAPRET_ASSET"
+  cp "$OUT/vendor/${ZAPRET_ASSET}.sha256" "$ROOT/vendor/${ZAPRET_ASSET}.sha256" 2>/dev/null || true
 fi
 
 echo "offline bundle → $OUT"

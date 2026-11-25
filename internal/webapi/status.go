@@ -367,7 +367,8 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request, p params) {
 		"flowoffload":   section("flowoffload"),
 		"ifaces":        section("ifaces"),
 		"client_scope":  section("client_scope"),
-		"nfqws2_errors": section("nfqws2_errors"),
+		// Не дублировать полный ReadFile: statusPayload уже дал available/lines/path.
+		"nfqws2_errors": status["nfqws2_errors"],
 		"backups":       backups,
 	}
 	for _, part := range strings.Split(p.Get("include"), ",") {

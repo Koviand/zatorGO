@@ -24,8 +24,17 @@ is_running() {
 	[ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
 
+# Live nfqws2 only: ignore supersweep/relock probe (--qnum=65535).
 nfqws_alive() {
-	pidof nfqws2 >/dev/null 2>&1
+	for pid in $(pidof nfqws2 2>/dev/null); do
+		[ -r "/proc/$pid/cmdline" ] || continue
+		cmd=$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null)
+		case "$cmd" in
+			*--qnum=65535*) continue ;;
+		esac
+		return 0
+	done
+	return 1
 }
 
 want_running() {

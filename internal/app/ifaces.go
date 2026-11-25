@@ -35,3 +35,14 @@ func (a *App) ensureNetworkIfaces(cfg *config.Config) (changed bool, err error) 
 func isRouterHost() bool {
 	return runtime.GOOS != "windows" && runtime.GOOS != "darwin"
 }
+
+// requireRouterIfaces — жёстко требовать IFACE_WAN/LAN (Entware/OpenWRT).
+// На VPS одно NIC часто без отдельного LAN — install не должен падать до Web UI.
+func requireRouterIfaces(p platform.Platform) bool {
+	switch p.Kind {
+	case platform.KindEntware, platform.KindOpenWRT:
+		return true
+	default:
+		return false
+	}
+}

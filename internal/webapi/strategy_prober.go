@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/AloofLibra/zator/internal/config"
 	"github.com/AloofLibra/zator/internal/firewall"
@@ -69,6 +70,8 @@ func (p nfqwsStrategyProber) Probe(ctx context.Context, profile int, candidates 
 	defer func() { _ = probe.Stop() }()
 
 	opts := netcheck.DefaultOptions()
+	opts.WaitBoth = true
+	opts.ProbeGap = 50 * time.Millisecond
 	opts.DialContext = netcheck.BindPortRangeDialer(
 		firewall.SuperSweepPortFirst, firewall.SuperSweepPortLast)
 	checker := netcheck.NewChecker(opts)

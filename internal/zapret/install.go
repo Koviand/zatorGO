@@ -204,10 +204,15 @@ func DownloadAndInstall(ctx context.Context, opts Options) (*Result, error) {
 	var sumIdx SumIndex
 	verifyBins := false
 	if opts.SHA256 == "" && !opts.AllowInsecure {
-		if offline && hasLocal {
-			return nil, fmt.Errorf("zapret: офлайн-установка требует Options.SHA256 (или AllowInsecure)")
+		if hasLocal {
+			if sum, ok := resolveLocalArchiveSHA256(local, asset); ok {
+				opts.SHA256 = sum
+				opts.logf("SHA256 из локального sidecar: %s…", sum[:12])
+			} else if offline {
+				return nil, fmt.Errorf("zapret: офлайн-установка требует Options.SHA256, файл %s.sha256 или sha256sum.txt рядом с архивом (или AllowInsecure)", filepath.Base(local))
+			}
 		}
-		if !offline {
+		if opts.SHA256 == "" && !offline {
 			idx, err := fetchSumIndex(ctx, client, url)
 			if err != nil {
 				return nil, fmt.Errorf("zapret: SHA256 обязателен (sha256sum.txt): %w", err)
@@ -530,6 +535,10 @@ func resolveLocalArchive(opts Options, asset string) (string, bool) {
 	}
 	addDir(opts.VendorDir)
 	addDir(os.Getenv(EnvVendorDir))
+	// ZATOR_BUNDLE_DIR/vendor — офлайн-бандл (README: ZATOR_BUNDLE_DIR=… zator install).
+	if bd := strings.TrimSpace(os.Getenv("ZATOR_BUNDLE_DIR")); bd != "" {
+		addDir(filepath.Join(bd, "vendor"))
+	}
 	if opts.Root != "" {
 		addDir(filepath.Join(filepath.Dir(opts.Root), "vendor"))
 		addDir(filepath.Join(opts.Root, "vendor"))
@@ -537,6 +546,48 @@ func resolveLocalArchive(opts Options, asset string) (string, bool) {
 	for _, p := range candidates {
 		if fileExists(p) {
 			return p, true
+		}
+	}
+	return "", false
+}
+
+// resolveLocalArchiveSHA256 ищет сумму рядом с локальным архивом:
+// <archive>.sha256 (hex или строка sha256sum) либо sha256sum.txt / SHA256SUMS в том же каталоге.
+func resolveLocalArchiveSHA256(archive, asset string) (string, bool) {
+	archive = strings.TrimSpace(archive)
+	if archive == "" {
+		return "", false
+	}
+	asset = path.Base(asset)
+	if asset == "" || asset == "." {
+		asset = filepath.Base(archive)
+	}
+	readSumFile := func(p string) (string, bool) {
+		body, err := os.ReadFile(p)
+		if err != nil {
+			return "", false
+		}
+		trimmed := strings.TrimSpace(string(body))
+		if sha256HexRe.MatchString(trimmed) {
+			return strings.ToLower(trimmed), true
+		}
+		if sum := ParseSHA256SumFile(body).ArchiveSum(asset); sum != "" {
+			return sum, true
+		}
+		// Одна строка «hex  filename» без полного индекса.
+		fields := strings.Fields(trimmed)
+		if len(fields) >= 1 && sha256HexRe.MatchString(fields[0]) {
+			return strings.ToLower(fields[0]), true
+		}
+		return "", false
+	}
+	if sum, ok := readSumFile(archive + ".sha256"); ok {
+		return sum, true
+	}
+	dir := filepath.Dir(archive)
+	for _, name := range []string{"sha256sum.txt", "SHA256SUMS"} {
+		if sum, ok := readSumFile(filepath.Join(dir, name)); ok {
+			return sum, true
 		}
 	}
 	return "", false

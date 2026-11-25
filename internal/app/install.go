@@ -53,9 +53,15 @@ func (a *App) Install() error {
 // Update обновляет встроенные ресурсы, сохраняя существующую конфигурацию
 // (пароль, auth_enabled, legacy token не трогаются).
 // На роутере повторно ставит iptables/ipset и подтягивает IFACE.
+// Требует завершённый install (zator.json): один bin/zator без конфига —
+// неполная установка; DefaultConfig с AuthEnabled=false писать нельзя
+// (иначе повторный install воспримет это как сознательный -no-auth).
 func (a *App) Update() error {
 	if !a.Installed() {
 		return fmt.Errorf("zator не установлен в %s", a.Paths.ZatorRoot)
+	}
+	if !a.ConfigExists() {
+		return fmt.Errorf("zator: нет %s — сначала завершите install (пароль/auth)", a.ConfigPath)
 	}
 	if err := a.Paths.EnsureDirs(); err != nil {
 		return err
@@ -220,8 +226,8 @@ func (a *App) seedZapretConfig(template []byte) error {
 	if c, err := config.Load(cfg); err == nil {
 		changed, e := a.ensureNetworkIfaces(c)
 		if e != nil {
-			// На сборочном хосте (Windows) маршрутов роутера нет — не валим install.
-			if !isRouterHost() {
+			// Windows/macOS и VPS без отдельного LAN — не валим install.
+			if !requireRouterIfaces(a.Platform) {
 				return nil
 			}
 			return fmt.Errorf("автоопределение IFACE_WAN/LAN: %w", e)

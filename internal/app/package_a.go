@@ -169,14 +169,15 @@ func (a *App) deployNfqwsWatchdog() error {
 	if err := os.MkdirAll(a.Paths.BinDir, 0o755); err != nil {
 		return err
 	}
-	if err := fsutil.AtomicWriteFile(dst, data, 0o755); err != nil {
+	if err := fsutil.WriteIfChanged(dst, data, 0o755); err != nil {
 		return err
 	}
 	link := "/opt/etc/init.d/S91zator-nfqws-watchdog"
 	_ = os.MkdirAll(filepath.Dir(link), 0o755)
-	_ = os.Remove(link)
-	if err := os.Symlink(dst, link); err != nil {
-		_ = fsutil.AtomicWriteFile(link, data, 0o755)
+	if _, err := os.Lstat(link); err != nil {
+		if err := os.Symlink(dst, link); err != nil {
+			_ = fsutil.WriteIfChanged(link, data, 0o755)
+		}
 	}
 	return nil
 }

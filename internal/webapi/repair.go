@@ -85,25 +85,30 @@ func (s *Server) handleRepair(w http.ResponseWriter, r *http.Request, p params) 
 		return
 
 	case "sweep":
+		worker, ok := sweep.ProfileWorker(id)
+		if !ok {
+			writeErrorCode(w, http.StatusBadRequest, CodeValidation,
+				"Режим sweep недоступен для этого профиля (нужны 1–4)", "")
+			return
+		}
+		s.runtimeMu.Lock()
+		defer s.runtimeMu.Unlock()
+		if s.relockActive || s.sweepRunningLocked() {
+			writeErrorCode(w, http.StatusConflict, CodeBusy,
+				"Служба занята суперавтопрогоном или auto-relock", "")
+			return
+		}
 		sw, err := s.sweeperOrDefault()
 		if err != nil {
 			writeErrorCode(w, http.StatusServiceUnavailable, CodeUnavailable,
 				"Суперавтопрогон недоступен", err.Error())
 			return
 		}
-		if sw.Running() || s.runtimeBusy() {
-			writeErrorCode(w, http.StatusConflict, CodeBusy,
-				"Служба занята суперавтопрогоном или auto-relock", "")
-			return
-		}
-		worker, ok := sweep.ProfileWorker(id)
-		if !ok {
-			worker = sweep.WorkerRKN
-		}
-		err = sw.Start(r.Context(), sweep.Params{
-			Scope:   scope,
-			Workers: []string{worker},
-		})
+		sp := sweep.DefaultParams()
+		sp.Scope = scope
+		sp.Workers = []string{worker}
+		// Прогон живёт дольше HTTP-запроса — контекст запроса не используем.
+		err = sw.Start(context.Background(), sp)
 		if err != nil {
 			s.publishEvent(Event{Type: "repair", State: "fail", Profile: id, Message: err.Error()})
 			if ae := mapSweepStartErr(err); ae != nil {

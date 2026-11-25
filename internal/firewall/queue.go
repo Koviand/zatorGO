@@ -124,10 +124,10 @@ func sanitizePorts(s string) string {
 	return strings.Join(out, ",")
 }
 
-// WriteQueueHook атомарно пишет скрипт в zapretRoot/QueueHookName.
+// WriteQueueHook атомарно пишет скрипт в zapretRoot/QueueHookName (только если изменился).
 func WriteQueueHook(zapretRoot string, cfg QueueHookConfig) (string, error) {
 	path := filepath.Join(zapretRoot, QueueHookName)
-	if err := fsutil.AtomicWriteFile(path, []byte(RenderQueueHook(cfg)), 0o755); err != nil {
+	if err := fsutil.WriteIfChanged(path, []byte(RenderQueueHook(cfg)), 0o755); err != nil {
 		return "", err
 	}
 	return path, nil

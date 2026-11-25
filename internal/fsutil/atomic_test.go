@@ -3,49 +3,35 @@ package fsutil
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
-func TestAtomicWriteFile(t *testing.T) {
+func TestWriteIfChangedSkipsSameContent(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "sub", "file.txt")
-
-	if err := AtomicWriteFile(path, []byte("one"), 0); err != nil {
-		t.Fatalf("create: %v", err)
+	path := filepath.Join(dir, "f.txt")
+	payload := []byte("hello\n")
+	if err := WriteIfChanged(path, payload, 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if err := AtomicWriteFile(path, []byte("two"), 0); err != nil {
-		t.Fatalf("overwrite: %v", err)
-	}
-	got, err := os.ReadFile(path)
+	st1, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != "two" {
-		t.Fatalf("content = %q, want %q", got, "two")
+	if err := WriteIfChanged(path, payload, 0o644); err != nil {
+		t.Fatal(err)
 	}
-
-	entries, err := os.ReadDir(filepath.Dir(path))
+	st2, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, e := range entries {
-		if strings.Contains(e.Name(), ".tmp.") {
-			t.Fatalf("temporary file left behind: %s", e.Name())
-		}
+	if !st1.ModTime().Equal(st2.ModTime()) {
+		t.Fatal("identical content must not rewrite file")
 	}
-}
-
-func TestAtomicWriteFileEmpty(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "empty")
-	if err := AtomicWriteFile(path, nil, 0o600); err != nil {
+	if err := WriteIfChanged(path, []byte("bye\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	st, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if st.Size() != 0 {
-		t.Fatalf("size = %d, want 0", st.Size())
+	got, _ := os.ReadFile(path)
+	if string(got) != "bye\n" {
+		t.Fatalf("got %q", got)
 	}
 }

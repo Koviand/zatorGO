@@ -97,6 +97,7 @@ func TestSetLockWritesManualOrigin(t *testing.T) {
 
 func TestRelockTriggersAfterFails(t *testing.T) {
 	e := newEnv(t, envOpts{})
+	e.svc.running = true
 	_ = e.srv.flags.set(BypassFlags{AutoRelock: true, AutoRelockFails: 2})
 	_ = e.srv.applyProfileLock(orchestra.ScopeDefault, 1, orchestra.Strategy(3))
 	e.srv.prober = &stubStrategyProber{Result: 0} // probe fail — live lock не трогаем

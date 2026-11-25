@@ -2,6 +2,7 @@ package webapi
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -85,12 +86,9 @@ func (s *Server) nfqws2ErrorsGet() map[string]any {
 	}
 	out := map[string]any{"available": false, "path": "", "content": "", "lines": 0}
 	for _, p := range candidates {
-		data, err := os.ReadFile(p)
+		data, err := readFileTail(p, maxErrLogBytes)
 		if err != nil {
 			continue
-		}
-		if len(data) > maxErrLogBytes {
-			data = data[len(data)-maxErrLogBytes:]
 		}
 		text := string(data)
 		n := 0
@@ -106,6 +104,36 @@ func (s *Server) nfqws2ErrorsGet() map[string]any {
 		return out
 	}
 	return out
+}
+
+// readFileTail читает не больше max байт с конца файла (без полного ReadFile).
+func readFileTail(path string, max int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	size := st.Size()
+	if size <= 0 {
+		return nil, nil
+	}
+	start := int64(0)
+	if size > max {
+		start = size - max
+	}
+	if _, err := f.Seek(start, 0); err != nil {
+		return nil, err
+	}
+	buf := make([]byte, size-start)
+	n, err := f.Read(buf)
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+	return buf[:n], nil
 }
 
 func (s *Server) postUpdateApply(r *http.Request, _ params) (map[string]any, error) {
@@ -128,12 +156,22 @@ func (s *Server) postUpdateApply(r *http.Request, _ params) (map[string]any, err
 		upToDate  bool
 		err       error
 	)
+	rollbackOnApplyFail := func(msg string) (map[string]any, error) {
+		if s.app != nil {
+			if rerr := s.app.RollbackPreUpdateBackup(); rerr != nil {
+				msg = msg + "; rollback: " + rerr.Error()
+			} else {
+				msg = msg + "; выполнен откат из pre-update backup"
+			}
+		}
+		return nil, errf(http.StatusBadGateway, msg)
+	}
 	if off.Offline && off.Bundle != nil {
 		out["offline"] = true
 		out["offline_reason"] = off.Reason
 		ar, aerr := u.ApplyBundle(*off.Bundle, "")
 		if aerr != nil {
-			return nil, errf(http.StatusBadGateway, "Офлайн-обновление не удалось: "+aerr.Error())
+			return rollbackOnApplyFail("Офлайн-обновление не удалось: " + aerr.Error())
 		}
 		if ar != nil {
 			installed = ar.Installed
@@ -147,7 +185,7 @@ func (s *Server) postUpdateApply(r *http.Request, _ params) (map[string]any, err
 		rep, rerr := u.Run(ctx, deploy.RunOptions{Variant: deploy.VariantFull})
 		err = rerr
 		if err != nil {
-			return nil, errf(http.StatusBadGateway, "Обновление не удалось: "+err.Error())
+			return rollbackOnApplyFail("Обновление не удалось: " + err.Error())
 		}
 		if rep != nil {
 			upToDate = rep.UpToDate

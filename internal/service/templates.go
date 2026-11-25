@@ -205,10 +205,17 @@ esac
 
 const keeneticHookTemplate = `#!/bin/sh
 # ndm пересобирает firewall при сетевых событиях: возвращаем правила zapret2.
+# Debounce + flock: иначе mangle и nat дают два параллельных restart-fw
+# (окно без NFQUEUE + гонки iptables без -w).
 [ "$table" != "mangle" ] && [ "$table" != "nat" ] && exit 0
 PATH=/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH
 export PATH
-{{shq .InitScript}} restart-fw
+LOCK=/var/run/zator-fw.lock
+(
+  flock -n 9 || exit 0
+  sleep 2
+  {{shq .InitScript}} restart-fw
+) 9>"$LOCK" &
 exit 0
 `
 

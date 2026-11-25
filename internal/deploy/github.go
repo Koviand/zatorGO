@@ -284,12 +284,31 @@ func (u *Updater) ApplyGitHubBinary(ctx context.Context) (*ApplyResult, string, 
 		return nil, tag, err
 	}
 	final := filepath.Join(binDir, "zator")
+	// Снимок текущего бинарника: если install нового упадёт — вернём старый.
+	prev := final + ".prev"
+	hadPrev := false
+	if old, rerr := os.ReadFile(final); rerr == nil && len(old) > 0 {
+		if werr := os.WriteFile(prev, old, 0o755); werr == nil {
+			hadPrev = true
+		}
+	}
+	restorePrev := func() {
+		if !hadPrev {
+			return
+		}
+		if data, err := os.ReadFile(prev); err == nil {
+			_ = os.WriteFile(final, data, 0o755)
+		}
+		_ = os.Remove(prev)
+	}
 	tmp := final + ".new"
 	data, err := os.ReadFile(dest)
 	if err != nil {
+		restorePrev()
 		return nil, tag, err
 	}
 	if err := os.WriteFile(tmp, data, 0o755); err != nil {
+		restorePrev()
 		return nil, tag, err
 	}
 	os.Remove(dest)
@@ -298,6 +317,7 @@ func (u *Updater) ApplyGitHubBinary(ctx context.Context) (*ApplyResult, string, 
 		// запущенного бинарника; fallback — WriteFile).
 		if werr := os.WriteFile(final, data, 0o755); werr != nil {
 			_ = os.Remove(tmp)
+			restorePrev()
 			return nil, tag, fmt.Errorf("deploy: замена бинарника: %v; fallback: %w", err, werr)
 		}
 		_ = os.Remove(tmp)
@@ -308,8 +328,10 @@ func (u *Updater) ApplyGitHubBinary(ctx context.Context) (*ApplyResult, string, 
 	cmd.Env = os.Environ()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		restorePrev()
 		return nil, tag, fmt.Errorf("deploy: %s install: %w (%s)", final, err, strings.TrimSpace(string(out)))
 	}
+	_ = os.Remove(prev)
 	ver := strings.TrimPrefix(tag, "v")
 	now := time.Now().UTC().Format("2006-01-02 15:04")
 	_ = WriteVersion(u.Paths, Version{

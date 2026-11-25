@@ -12,6 +12,22 @@ import (
 	"github.com/AloofLibra/zator/internal/orchestra"
 )
 
+func TestFixDiscordBusyWhenRelockActive(t *testing.T) {
+	e := newEnv(t, envOpts{})
+	if !e.srv.beginRelock() {
+		t.Fatal("beginRelock")
+	}
+	defer e.srv.endRelock()
+	body := url.Values{"setting": {"fix_discord"}}
+	req := httptest.NewRequest(http.MethodPost, "/api/settings", strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	e.srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status %d want 409: %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestFixDiscordTCPOkVoiceConfigured(t *testing.T) {
 	e := newEnv(t, envOpts{})
 	// hostlist на месте

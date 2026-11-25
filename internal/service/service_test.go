@@ -278,15 +278,15 @@ func TestRenderKeeneticHook(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "#!/bin/sh\n" +
-		"# ndm пересобирает firewall при сетевых событиях: возвращаем правила zapret2.\n" +
-		"[ \"$table\" != \"mangle\" ] && [ \"$table\" != \"nat\" ] && exit 0\n" +
-		"PATH=/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH\n" +
-		"export PATH\n" +
-		"/opt/zapret2/init.d/sysv/zapret2 restart-fw\n" +
-		"exit 0\n"
-	if got != want {
-		t.Errorf("хук:\n%s\nожидалось:\n%s", got, want)
+	for _, needle := range []string{
+		"flock -n 9",
+		"sleep 2",
+		"/opt/zapret2/init.d/sysv/zapret2 restart-fw",
+		"zator-fw.lock",
+	} {
+		if !strings.Contains(got, needle) {
+			t.Errorf("хук без %q:\n%s", needle, got)
+		}
 	}
 }
 
@@ -591,6 +591,15 @@ func TestStatusMatchesByCmdlineWhenCommDiffers(t *testing.T) {
 	st, _ := e.ctl(t, platSystemd).Status(context.Background(), UnitZapret2)
 	if !st.Running {
 		t.Fatalf("%+v", st)
+	}
+}
+
+func TestMatchNfqws2IgnoresProbeQueue(t *testing.T) {
+	if !MatchNfqws2("nfqws2", []string{"/opt/zapret2/nfq2/nfqws2", "--qnum=200"}) {
+		t.Fatal("live nfqws2 must match")
+	}
+	if MatchNfqws2("nfqws2", []string{"/opt/zapret2/nfq2/nfqws2", "--qnum=65535"}) {
+		t.Fatal("probe qnum=65535 must not match as live zapret2")
 	}
 }
 

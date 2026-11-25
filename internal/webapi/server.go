@@ -137,6 +137,17 @@ type Server struct {
 	schedCancel context.CancelFunc
 
 	events *eventHub // long-poll /api/events (RM0b)
+
+	// Кэш статуса процессов для частых status.cgi (15 с poll UI).
+	procCacheMu sync.Mutex
+	procCache   procStatusCache
+}
+
+const procStatusTTL = 3 * time.Second
+
+type procStatusCache struct {
+	zapretAt, validatorAt time.Time
+	zapretOK, validatorOK bool
 }
 
 // New создаёт сервер.
@@ -461,12 +472,34 @@ func (s *Server) editConfigs(fn func(*config.Config) error) error {
 
 // --- служба ---
 
+func (s *Server) invalidateProcCache() {
+	s.procCacheMu.Lock()
+	s.procCache = procStatusCache{}
+	s.procCacheMu.Unlock()
+}
+
 func (s *Server) zapretRunning(ctx context.Context) bool {
-	if s.svc == nil {
-		return service.IsNfqws2Running()
+	now := s.now()
+	s.procCacheMu.Lock()
+	if !s.procCache.zapretAt.IsZero() && now.Sub(s.procCache.zapretAt) < procStatusTTL {
+		ok := s.procCache.zapretOK
+		s.procCacheMu.Unlock()
+		return ok
 	}
-	st, err := s.svc.Status(ctx, service.UnitZapret2)
-	return err == nil && st.Running
+	s.procCacheMu.Unlock()
+
+	var ok bool
+	if s.svc == nil {
+		ok = service.IsNfqws2Running()
+	} else {
+		st, err := s.svc.Status(ctx, service.UnitZapret2)
+		ok = err == nil && st.Running
+	}
+	s.procCacheMu.Lock()
+	s.procCache.zapretAt = now
+	s.procCache.zapretOK = ok
+	s.procCacheMu.Unlock()
+	return ok
 }
 
 // restartIfRunning перезапускает zapret2, если он запущен; restarted — рестарт выполнен.
@@ -508,9 +541,14 @@ func (s *Server) restartIfRunning(ctx context.Context) bool {
 		} else {
 			s.app.ClearServiceWarnings()
 		}
+		s.invalidateProcCache()
 		return true
 	}
-	return s.svc.Restart(ctx, service.UnitZapret2) == nil
+	ok := s.svc.Restart(ctx, service.UnitZapret2) == nil
+	if ok {
+		s.invalidateProcCache()
+	}
+	return ok
 }
 
 // maybeRestart учитывает параметр restart=0 (отложить рестарт).

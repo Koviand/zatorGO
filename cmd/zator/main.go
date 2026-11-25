@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -20,6 +21,7 @@ import (
 	"github.com/AloofLibra/zator/internal/app"
 	"github.com/AloofLibra/zator/internal/config"
 	"github.com/AloofLibra/zator/internal/deploy"
+	"github.com/AloofLibra/zator/internal/service"
 	"github.com/AloofLibra/zator/internal/webapi"
 )
 
@@ -288,6 +290,15 @@ func cmdUpdate(args []string, stdout, stderr io.Writer) int {
 
 	u := deploy.New(a.Paths)
 	off := deploy.ResolveOfflineBundle(os.Getenv)
+	rollbackApply := func(cause error) int {
+		fmt.Fprintf(stderr, "%v\n", cause)
+		if rerr := a.RollbackPreUpdateBackup(); rerr != nil {
+			fmt.Fprintf(stderr, "rollback: %v\n", rerr)
+		} else {
+			fmt.Fprintln(stdout, "выполнен откат из pre-update backup")
+		}
+		return 1
+	}
 	if off.Offline {
 		if off.Bundle == nil {
 			fmt.Fprintln(stdout, "офлайн-режим: бандл не найден (задайте ZATOR_BUNDLE_DIR или положите vendor/+zator-*.tar.gz в cwd при Z2R_OFFLINE=1)")
@@ -296,21 +307,15 @@ func cmdUpdate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "офлайн-бандл: %s\n", off.Bundle.Tarball)
 		ar, err := u.ApplyBundle(*off.Bundle, "")
 		if err != nil {
-			fmt.Fprintf(stderr, "офлайн ApplyBundle: %v\n", err)
-			return 1
+			return rollbackApply(fmt.Errorf("офлайн ApplyBundle: %w", err))
 		}
 		if ar != nil {
 			fmt.Fprintf(stdout, "офлайн: установлено файлов %d\n", ar.Installed)
 		}
 		if err := a.VerifyAfterUpdate(); err != nil {
-			fmt.Fprintf(stderr, "post-update verify: %v\n", err)
-			if rerr := a.RollbackPreUpdateBackup(); rerr != nil {
-				fmt.Fprintf(stderr, "rollback: %v\n", rerr)
-			} else {
-				fmt.Fprintln(stdout, "выполнен откат из pre-update backup")
-			}
-			return 1
+			return rollbackApply(fmt.Errorf("post-update verify: %w", err))
 		}
+		postUpdateRestartServices(a, stdout, stderr)
 		return 0
 	}
 	rep, err := u.Run(context.Background(), deploy.RunOptions{
@@ -318,8 +323,7 @@ func cmdUpdate(args []string, stdout, stderr io.Writer) int {
 		Force:   *force,
 	})
 	if err != nil {
-		fmt.Fprintf(stderr, "проверка/применение релиза: %v\n", err)
-		return 1
+		return rollbackApply(fmt.Errorf("проверка/применение релиза: %w", err))
 	}
 	if rep != nil && rep.UpToDate {
 		fmt.Fprintln(stdout, "релизы: уже актуальная версия (для принудительного скачивания: zator update -force)")
@@ -332,17 +336,44 @@ func cmdUpdate(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintln(stdout)
 		if err := a.VerifyAfterUpdate(); err != nil {
-			fmt.Fprintf(stderr, "post-update verify: %v\n", err)
-			if rerr := a.RollbackPreUpdateBackup(); rerr != nil {
-				fmt.Fprintf(stderr, "rollback: %v\n", rerr)
-			} else {
-				fmt.Fprintln(stdout, "выполнен откат из pre-update backup")
-			}
-			return 1
+			return rollbackApply(fmt.Errorf("post-update verify: %w", err))
 		}
 		fmt.Fprintln(stdout, "post-update verify: ok")
+		postUpdateRestartServices(a, stdout, stderr)
 	}
 	return 0
+}
+
+// postUpdateRestartServices — как Web schedulePostUpdateRestarts: args + рестарт zapret2/webui.
+func postUpdateRestartServices(a *app.App, stdout, stderr io.Writer) {
+	if _, err := a.PrepareZapretRuntime(); err != nil {
+		fmt.Fprintf(stderr, "предупреждение: prepare после update: %v\n", err)
+	}
+	mgr, err := service.New(service.Config{
+		Paths:    a.Paths,
+		Platform: a.Platform,
+		ZatorBin: filepath.Join(a.Paths.BinDir, "zator"),
+		ArgsFile: filepath.Join(a.Paths.ZapretRoot, "nfqws2.args"),
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "предупреждение: службы после update: %v\n", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if err := a.RestartZapretTransactional(ctx, func(ctx context.Context) error {
+		return mgr.Restart(ctx, service.UnitZapret2)
+	}); err != nil {
+		fmt.Fprintf(stderr, "предупреждение: рестарт zapret2: %v\n", err)
+	} else {
+		fmt.Fprintln(stdout, "zapret2 перезапущен")
+	}
+	_ = mgr.Restart(ctx, service.UnitValidator)
+	if err := mgr.Restart(ctx, service.UnitWebUI); err != nil {
+		fmt.Fprintf(stderr, "предупреждение: рестарт webui: %v\n", err)
+	} else {
+		fmt.Fprintln(stdout, "webui перезапущен (если служба была установлена)")
+	}
 }
 
 // cmdUpdateStrategies — тот же путь, что Web UI setting=strategies_feed:

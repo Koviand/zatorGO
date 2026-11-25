@@ -61,6 +61,11 @@ type Config struct {
 	CancelPoll time.Duration
 	// Logf — необязательный журнал (строки консоли прогона).
 	Logf func(format string, args ...any)
+	// OnProfileLock — после успешного применения победителя к профилю (не домену).
+	// Web UI пишет lock_origin=supersweep.
+	OnProfileLock func(profile, strategy int)
+	// CanApplyProfile — false → не писать лок профиля (auto_mode / mode guard).
+	CanApplyProfile func(profile int) bool
 }
 
 // Params — параметры одного суперавтопрогона.
@@ -852,7 +857,13 @@ func (r *run) settleWorker(name string) {
 	}
 	switch {
 	case winner > 0:
-		if err := r.setLocks(strconv.Itoa(pkey), protos, winner); err != nil {
+		if r.c.cfg.CanApplyProfile != nil && !r.c.cfg.CanApplyProfile(pkey) {
+			r.c.logf("Профиль %d: применение пропущено (auto_mode / mode guard)", pkey)
+			if name != WorkerRKN {
+				r.restorePrev("profile", strconv.Itoa(pkey))
+				marker = "skipped"
+			}
+		} else if err := r.setLocks(strconv.Itoa(pkey), protos, winner); err != nil {
 			r.c.logf("Профиль %d: не удалось применить стратегию %d: %v", pkey, winner, err)
 			if name != WorkerRKN {
 				marker = "error"
@@ -863,6 +874,9 @@ func (r *run) settleWorker(name string) {
 			}
 			r.noteApplied("profile", strconv.Itoa(pkey), winner)
 			r.c.logf("Профиль %d: применена стратегия %d", pkey, winner)
+			if r.c.cfg.OnProfileLock != nil {
+				r.c.cfg.OnProfileLock(pkey, winner)
+			}
 		}
 	case name == WorkerRKN:
 		r.c.logf("РКН: зелёного покрытия нет — профильная строка не менялась")

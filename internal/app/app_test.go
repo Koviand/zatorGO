@@ -69,6 +69,33 @@ func TestLoadInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestUpdateRejectsPartialInstallWithoutConfig(t *testing.T) {
+	a := newTestApp(t)
+	if err := os.MkdirAll(a.Paths.BinDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(a.Paths.BinDir, "zator")
+	if err := os.WriteFile(bin, []byte("stub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !a.Installed() {
+		t.Fatal("Installed() должен быть true при наличии bin/zator")
+	}
+	if a.ConfigExists() {
+		t.Fatal("zator.json не должен существовать")
+	}
+	err := a.Update()
+	if err == nil {
+		t.Fatal("Update без zator.json должен вернуть ошибку")
+	}
+	if !strings.Contains(err.Error(), "завершите install") {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if a.ConfigExists() {
+		t.Fatal("Update не должен создавать zator.json с AuthEnabled=false")
+	}
+}
+
 func TestInstallUpdateUninstall(t *testing.T) {
 	a := newTestApp(t)
 	if a.Installed() {

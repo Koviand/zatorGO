@@ -16,7 +16,13 @@ import (
 var (
 	gvSeederMu sync.Mutex
 	gvSeeder   *googlevideo.Seeder
+
+	gvMidstreamMu      sync.Mutex
+	gvMidstreamTimer   *time.Timer
+	gvMidstreamPending bool
 )
+
+const gvMidstreamDebounce = 2 * time.Second
 
 // GooglevideoSeedStatus — статус фонового автопробоя для Domains UI.
 func (a *App) GooglevideoSeedStatus() googlevideo.SeedStatus {
@@ -55,7 +61,8 @@ func (a *App) StartGooglevideoSeeder(ctx context.Context) {
 			_ = hostKey
 			_ = strategy
 			a.touchAutoLockedReloadStamp()
-			a.EnsureGooglevideoMidstream(context.Background())
+			// Один midstream-apply на пачку сидов (не Save+custom.d на каждый sn-*).
+			a.scheduleGooglevideoMidstream()
 		},
 	})
 	gvSeeder = seeder
@@ -71,6 +78,33 @@ func (a *App) StopGooglevideoSeeder() {
 	if s != nil {
 		s.Stop()
 	}
+	gvMidstreamMu.Lock()
+	if gvMidstreamTimer != nil {
+		gvMidstreamTimer.Stop()
+		gvMidstreamTimer = nil
+	}
+	gvMidstreamPending = false
+	gvMidstreamMu.Unlock()
+}
+
+// scheduleGooglevideoMidstream — debounce EnsureGooglevideoMidstream после пачки OnSeeded.
+func (a *App) scheduleGooglevideoMidstream() {
+	gvMidstreamMu.Lock()
+	defer gvMidstreamMu.Unlock()
+	gvMidstreamPending = true
+	if gvMidstreamTimer != nil {
+		gvMidstreamTimer.Stop()
+	}
+	gvMidstreamTimer = time.AfterFunc(gvMidstreamDebounce, func() {
+		gvMidstreamMu.Lock()
+		run := gvMidstreamPending
+		gvMidstreamPending = false
+		gvMidstreamTimer = nil
+		gvMidstreamMu.Unlock()
+		if run {
+			a.EnsureGooglevideoMidstream(context.Background())
+		}
+	})
 }
 
 // touchAutoLockedReloadStamp сигналит Lua (slm_merge_auto_locked_from_disk), что TSV обновился.
@@ -91,9 +125,12 @@ func (a *App) EnsureGooglevideoMidstream(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	// Не форсим ENABLE, если пользователь выключил — только sync ARGS/SKIP и hook.
-	_, _ = cfg.SyncWssizeRampVars()
-	cfg.StripWssizeShellIf()
-	_ = cfg.Save()
+	changed, _ := cfg.SyncWssizeRampVars()
+	if cfg.StripWssizeShellIf() {
+		changed = true
+	}
+	if changed {
+		_ = cfg.Save()
+	}
 	_ = a.SyncCustomDHooks(cfg)
 }

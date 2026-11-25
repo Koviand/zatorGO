@@ -340,6 +340,102 @@ func TestInstallFromLocalArchive(t *testing.T) {
 	}
 }
 
+func TestInstallFromLocalArchiveSidecarSHA256(t *testing.T) {
+	ver := "0.8.2"
+	dir := t.TempDir()
+	asset := AssetName(ver, false)
+	vendor := filepath.Join(dir, "vendor")
+	archPath := filepath.Join(vendor, asset)
+	if err := os.MkdirAll(vendor, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := buildArchive(t, "zapret2-v"+ver)
+	sum := sha256.Sum256(raw)
+	hexSum := hex.EncodeToString(sum[:])
+	if err := os.WriteFile(archPath, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(archPath+".sha256", []byte(hexSum+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(dir, "opt", "zapret2")
+	res, err := DownloadAndInstall(context.Background(), Options{
+		Root: root, Arch: platform.ArchX86_64, Version: ver,
+		VendorDir: vendor, Offline: true, Client: fastClient(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(res.URL, "file://") {
+		t.Fatalf("local sidecar: %+v", res)
+	}
+	// Offline + local без sidecar и без Options.SHA256 — ошибка.
+	bare := t.TempDir()
+	bareVendor := filepath.Join(bare, "vendor")
+	if err := os.MkdirAll(bareVendor, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bareVendor, asset), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DownloadAndInstall(context.Background(), Options{
+		Root: filepath.Join(bare, "z"), Arch: platform.ArchX86_64, Version: ver,
+		VendorDir: bareVendor, Offline: true, Client: fastClient(),
+	}); err == nil || !strings.Contains(err.Error(), "SHA256") {
+		t.Fatalf("offline without sidecar: %v", err)
+	}
+}
+
+func TestResolveLocalArchiveBundleDir(t *testing.T) {
+	ver := "0.8.2"
+	asset := AssetName(ver, false)
+	bundle := t.TempDir()
+	vendor := filepath.Join(bundle, "vendor")
+	if err := os.MkdirAll(vendor, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := buildArchive(t, "zapret2-v"+ver)
+	if err := os.WriteFile(filepath.Join(vendor, asset), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ZATOR_BUNDLE_DIR", bundle)
+	t.Setenv(EnvVendorDir, "")
+	got, ok := resolveLocalArchive(Options{Root: filepath.Join(t.TempDir(), "zapret2")}, asset)
+	if !ok || !strings.Contains(got, filepath.Join("vendor", asset)) {
+		t.Fatalf("got=%q ok=%v", got, ok)
+	}
+}
+
+func TestResolveLocalArchiveSHA256(t *testing.T) {
+	dir := t.TempDir()
+	asset := "zapret2-v1.tar.gz"
+	arch := filepath.Join(dir, asset)
+	want := strings.Repeat("ab", 32)
+	if err := os.WriteFile(arch, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(arch+".sha256", []byte(want+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := resolveLocalArchiveSHA256(arch, asset)
+	if !ok || got != want {
+		t.Fatalf("sidecar hex: got=%q ok=%v", got, ok)
+	}
+	dir2 := t.TempDir()
+	arch2 := filepath.Join(dir2, asset)
+	if err := os.WriteFile(arch2, []byte("y"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sumLine := want + "  " + asset + "\n"
+	if err := os.WriteFile(filepath.Join(dir2, "sha256sum.txt"), []byte(sumLine), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, ok = resolveLocalArchiveSHA256(arch2, asset)
+	if !ok || got != want {
+		t.Fatalf("sha256sum.txt: got=%q ok=%v", got, ok)
+	}
+}
+
 func TestInstallSkipAndForce(t *testing.T) {
 	ver := "0.8.2"
 	var hits int32

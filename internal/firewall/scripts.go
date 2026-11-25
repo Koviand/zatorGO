@@ -153,7 +153,7 @@ func WriteCustomD(zapretRoot string, flavor CustomDFlavor, name, content string)
 		return "", fmt.Errorf("firewall: invalid custom.d file name %q", name)
 	}
 	p := CustomDPath(zapretRoot, flavor, name)
-	if err := fsutil.AtomicWriteFile(p, []byte(content), 0o755); err != nil {
+	if err := fsutil.WriteIfChanged(p, []byte(content), 0o755); err != nil {
 		return "", err
 	}
 	return p, nil

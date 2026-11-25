@@ -21,6 +21,7 @@ func TestNfqwsWatchdogHasBackoffAndRestartFW(t *testing.T) {
 		"bump_backoff",
 		"rate-limit",
 		"LOG_MAX_BYTES",
+		"--qnum=65535", // ignore supersweep/relock probe
 	} {
 		if !strings.Contains(s, needle) {
 			t.Errorf("watchdog missing %q", needle)

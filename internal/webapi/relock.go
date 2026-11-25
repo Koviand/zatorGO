@@ -3,6 +3,7 @@ package webapi
 import (
 	"context"
 	"log"
+	"os"
 	"sort"
 	"strconv"
 	"sync"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/AloofLibra/zator/internal/netcheck"
 	"github.com/AloofLibra/zator/internal/orchestra"
+	"github.com/AloofLibra/zator/internal/platform"
 	"github.com/AloofLibra/zator/internal/telemetry"
 )
 
@@ -19,20 +21,25 @@ const (
 	relockCheckTimeout    = 45 * time.Second
 	relockProbeTimeout    = 8 * time.Minute
 	relockMaxCandidates   = 12
+	// relockCooldownDefault — пауза после любой попытки tryRelock (успех/fail),
+	// чтобы при офлайне/остановленном nfqws2 не крутить 8‑минутный probe каждые 90 с.
+	relockCooldownDefault = 30 * time.Minute
 )
 
 // relockMonitor — фоновый монитор TLS для профилей с ручным/рекомендованным локом.
 type relockMonitor struct {
 	s *Server
 
-	mu          sync.Mutex
-	fails       map[int]int
-	degraded    map[int]bool
-	warning     string
-	lastRelock  time.Time
-	busyProfile int
-	cancel      context.CancelFunc
-	interval    time.Duration
+	mu             sync.Mutex
+	fails          map[int]int
+	degraded       map[int]bool
+	warning        string
+	lastRelock     time.Time // момент последней попытки tryRelock (любой исход)
+	nextProfileIdx int       // round-robin, чтобы один профиль не голодал остальные
+	busyProfile    int
+	cancel         context.CancelFunc
+	interval       time.Duration
+	cooldown       time.Duration
 }
 
 func newRelockMonitor(s *Server) *relockMonitor {
@@ -41,6 +48,7 @@ func newRelockMonitor(s *Server) *relockMonitor {
 		fails:    map[int]int{},
 		degraded: map[int]bool{},
 		interval: relockIntervalDefault,
+		cooldown: relockCooldownDefault,
 	}
 }
 
@@ -116,11 +124,26 @@ func (m *relockMonitor) tick(ctx context.Context) {
 	if m.s.runtimeBusy() {
 		return
 	}
+	// Не крутить probe, если служба остановлена или пользователь не хочет nfqws2.
+	if !m.s.zapretWantedAndRunning(ctx) {
+		return
+	}
 	threshold := flags.AutoRelockFails
-	for _, id := range relockWatchProfiles() {
+	profiles := relockWatchProfiles()
+	if len(profiles) == 0 {
+		return
+	}
+
+	m.mu.Lock()
+	start := m.nextProfileIdx % len(profiles)
+	inCooldown := !m.lastRelock.IsZero() && m.s.now().Sub(m.lastRelock) < m.cooldown
+	m.mu.Unlock()
+
+	for i := 0; i < len(profiles); i++ {
 		if ctx.Err() != nil {
 			return
 		}
+		id := profiles[(start+i)%len(profiles)]
 		if !m.profileHasFixedLock(id) {
 			m.mu.Lock()
 			delete(m.fails, id)
@@ -143,10 +166,24 @@ func (m *relockMonitor) tick(ctx context.Context) {
 		}
 		m.mu.Unlock()
 		if n >= threshold {
+			if inCooldown {
+				m.setWarning("auto-relock: cooldown после предыдущей попытки")
+				// Сдвигаем указатель, чтобы следующий тик смотрел другие профили.
+				m.mu.Lock()
+				m.nextProfileIdx = (start + i + 1) % len(profiles)
+				m.mu.Unlock()
+				return
+			}
+			m.mu.Lock()
+			m.nextProfileIdx = (start + i + 1) % len(profiles)
+			m.mu.Unlock()
 			m.tryRelock(ctx, id)
-			return // один профиль за тик
+			return
 		}
 	}
+	m.mu.Lock()
+	m.nextProfileIdx = (start + 1) % len(profiles)
+	m.mu.Unlock()
 }
 
 func relockWatchProfiles() []int {
@@ -156,7 +193,12 @@ func relockWatchProfiles() []int {
 
 func (m *relockMonitor) profileHasFixedLock(id int) bool {
 	lock, _ := m.s.effectiveLock(orchestra.ScopeDefault, id)
-	return lock != "" && lock != "auto"
+	st, err := orchestra.ParseStrategy(lock)
+	if err != nil {
+		return false
+	}
+	// auto / OFF(0) — не фиксированный рабочий lock; relock не трогает.
+	return !st.IsAuto() && !st.IsOff()
 }
 
 func (m *relockMonitor) checkProfileOK(ctx context.Context, id int) bool {
@@ -186,6 +228,8 @@ func (m *relockMonitor) tryRelock(ctx context.Context, id int) {
 	defer func() {
 		m.mu.Lock()
 		m.busyProfile = 0
+		// Любая попытка включает cooldown (успех или fail) — нет шторма при offline.
+		m.lastRelock = m.s.now()
 		m.mu.Unlock()
 	}()
 
@@ -195,6 +239,11 @@ func (m *relockMonitor) tryRelock(ctx context.Context, id int) {
 		return
 	}
 	defer m.s.endRelock()
+
+	if !m.s.zapretWantedAndRunning(ctx) {
+		m.setWarning("auto-relock: пропуск — zapret2 не запущен")
+		return
+	}
 
 	cfg, installed := m.s.readConfig()
 	if !installed || cfg == nil {
@@ -275,9 +324,22 @@ func (m *relockMonitor) tryRelock(ctx context.Context, id int) {
 	m.fails[id] = 0
 	delete(m.degraded, id)
 	m.warning = ""
-	m.lastRelock = m.s.now()
 	m.mu.Unlock()
 	log.Printf("webapi: auto-relock profile %d → strategy %d (probe)", id, best)
+}
+
+// zapretWantedAndRunning — пользователь хочет nfqws2 и процесс жив (не probe).
+func (s *Server) zapretWantedAndRunning(ctx context.Context) bool {
+	if s.app != nil {
+		entware := s.app.Platform.Kind == platform.KindEntware ||
+			s.app.Platform.InitSystem == platform.InitEntware
+		if entware {
+			if _, err := os.Stat(s.app.NfqwsWantRunningPath()); err != nil {
+				return false
+			}
+		}
+	}
+	return s.zapretRunning(ctx)
 }
 
 // beginRelock помечает auto-relock активным, если нет supersweep/уже идущего relock.
@@ -314,8 +376,13 @@ func (s *Server) relockBlocksRuntime() bool {
 func (m *relockMonitor) relockCandidates(ctx context.Context, id int, prev orchestra.Strategy) []int {
 	var out []int
 	seen := map[int]bool{}
+	cfg, _ := m.s.readConfig()
+	max := 12
+	if cfg != nil {
+		max = cfg.ProfileMaxStrategyOrDefault(id)
+	}
 	add := func(n int) {
-		if n < 1 || seen[n] {
+		if n < 1 || n > max || seen[n] {
 			return
 		}
 		seen[n] = true
@@ -329,12 +396,7 @@ func (m *relockMonitor) relockCandidates(ctx context.Context, id int, prev orche
 			add(r.Strategy)
 		}
 	}
-	cfg, _ := m.s.readConfig()
-	max := 12
-	if cfg != nil {
-		max = cfg.ProfileMaxStrategyOrDefault(id)
-	}
-	if !prev.IsAuto() {
+	if !prev.IsAuto() && !prev.IsOff() {
 		p := int(prev)
 		for _, d := range []int{1, -1, 2, -2, 3, -3} {
 			add(p + d)
